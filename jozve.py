@@ -405,15 +405,19 @@ MARKUP_END = "===پایان==="
 
 
 def _extract_between_markers(t: str):
-    """استخراج جواب نهایی بین سنتینل‌های ===شروع=== و ===پایان=== (آخرین شروع)"""
-    s = t.rfind("===شروع===")
-    if s == -1:
-        return None
-    rest = t[s + len("===شروع==="):]
-    e = rest.find(MARKUP_END)
-    seg = rest[:e] if e != -1 else rest
-    seg = seg.strip()
-    return seg or None
+    """بلندترین جفت ===شروع===…===پایان=== را برمی‌دارد (reasoning جفت‌های قلابی
+    با placeholder می‌نویسد؛ بلوک واقعی همیشه بلندترین است)"""
+    best = None
+    s = t.find("===شروع===")
+    while s != -1:
+        e = t.find(MARKUP_END, s + len("===شروع==="))
+        if e == -1:
+            break
+        seg = t[s + len("===شروع==="):e].strip()
+        if best is None or len(seg) > len(best):
+            best = seg
+        s = t.find("===شروع===", e + len(MARKUP_END))
+    return best or None
 
 
 def _clean_fragment(t: str) -> str:
@@ -476,17 +480,22 @@ def _write_section(words, i, k, sec: dict, a: int, b: int, used: set) -> str:
     cont = 0
     raw = r.get("text") or ""
     while (cont < 3 and ("===شروع===" not in raw or len(frag.split()) < cap)):
-        msgs.append({"role": "assistant", "content": raw})
-        if "===شروع===" not in raw:
-            msgs.append({"role": "user", "content":
-                         "تحلیل کافی است — دیگر تحلیل ننویس. همین حالا خط «===شروع===» را بگذار و "
-                         "مارکاپ کامل فصل را بنویس و با «===پایان===» تمام کن."})
+        if "===شروع===" not in raw or len(frag.split()) < 60:
+            # شروع تازه: reasoning چرک را از زمینه حذف کن تا بودجه برای محتوا بماند
+            msgs = msgs[:2] + [
+                {"role": "assistant", "content": "تحلیل کامل شد."},
+                {"role": "user", "content":
+                 "عالی. حالا بدون هیچ تحلیل و توضیحی، فقط این را بفرست: خط «===شروع===»، "
+                 "سپس مارکاپ کامل فصل (با جدول/کادر/نمودار/نقشه ذهنی)، سپس خط «===پایان===». "
+                 "هیچ کلمه‌ای خارج از این دو علامت ننویس."},
+            ]
         else:
+            msgs.append({"role": "assistant", "content": raw})
             msgs.append({"role": "user", "content":
                          "خروجی‌ات قبل از ===پایان=== قطع شده. دقیقاً از همان نقطهٔ قطع ادامه بده؛ "
                          "هیچ چیز را تکرار نکن، قبلی‌ها را بازنویسی نکن. اگر بازه تمام شده، فقط بنویس: "
                          "===پایان==="})
-        r2 = _chat(msgs, max_tokens=6000, temperature=0.2)
+        r2 = _chat(msgs, max_tokens=8000, temperature=0.2)
         if not r2.get("ok"):
             log.warning(f"⚠️ ادامهٔ فصل {i} ناموفق: {r2.get('error')}")
             break
@@ -498,7 +507,7 @@ def _write_section(words, i, k, sec: dict, a: int, b: int, used: set) -> str:
             break
         add = add.replace(MARKUP_END, "").strip()
         if add and not frag.endswith(add[-60:][:60]):
-            frag += ("\n" if frag else "") + add
+            frag = add if len(add.split()) > len(frag.split()) else frag + "\n" + add
         r = r2
         cont += 1
 
