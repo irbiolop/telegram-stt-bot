@@ -84,6 +84,8 @@ logging.basicConfig(
 )
 log = logging.getLogger("STT-Bot")
 
+BANNER = "🎙 ربات تبدیل صدا به متن فارسی (Google Speech API) — آماده به کار"
+
 client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
 
 # ================== وضعیت صف پردازش ==================
@@ -499,21 +501,26 @@ def start_health_server():
 #  اجرا
 # =========================================================
 async def main():
+    # اول پورت سلامت باز شود تا Render/HF اسکن پورت را پاس کند و
+    # cron-job.org حتی هنگام اختلال تلگرام هم پاسخ بگیرد (تابع idempotent است)
+    start_health_server()
     await client.start(bot_token=BOT_TOKEN)
     me = await client.get_me()
     log.info(BANNER)
     print(f"✅ ربات @{me.username or '?'} آماده است — منتظر فایل‌ها...")
-    start_health_server()
     await client.run_until_disconnected()
 
 
 if __name__ == "__main__":
-    # الگوی امن اجرای Telethon + اتصال مجدد خودکار در صورت قطعی (برای اجرای ۲۴/۷)
+    # اتصال مجدد خودکار در صورت قطعی (برای اجرای ۲۴/۷)
+    # ⚠️ عمداً از «with client:» استفاده نمی‌کنیم: __enter__ در Telethon متد
+    # start() را «بدون bot_token» صدا می‌زند؛ روی سرور بدون TTY (Render/Colab/
+    # Docker) نشست تازه به پرامپت «Please enter your phone» می‌خورد و با
+    # EOFError می‌میرد. main() خودش با bot_token لاگین می‌کند.
     while True:
         try:
-            with client:
-                client.loop.run_until_complete(main())
-                break  # خروج تمیز (مثل Ctrl+C)
+            client.loop.run_until_complete(main())
+            break  # خروج تمیز (مثل Ctrl+C)
         except KeyboardInterrupt:
             log.info("👋 ربات با دستور کاربر متوقف شد")
             break
