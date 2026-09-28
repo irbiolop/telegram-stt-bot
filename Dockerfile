@@ -12,8 +12,8 @@
 FROM python:3.11-slim
 
 # ffmpeg برای تبدیل صدا + اصول بهداشت کانتینر
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+RUN apt-get update -qq \
+    && apt-get install -y -qq --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # --- اختیاری: مرورگر هدلس برای اسکرپینگ/اتوماسیون ---
@@ -28,7 +28,7 @@ RUN useradd -m -u 1000 user
 WORKDIR /app
 
 COPY --chown=user:user requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -q --no-cache-dir -r requirements.txt
 
 COPY --chown=user:user bot.py .
 
