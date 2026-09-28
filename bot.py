@@ -58,6 +58,12 @@ GOOGLE_RETRIES = int(os.getenv("GOOGLE_RETRIES", "3"))  # تعداد تلاش م
 NORMALIZE = os.getenv("NORMALIZE", "1") == "1"         # تقویت خودکار بلندی صدا (مثل normalize در برنامه اصلی)
 SESSION_NAME = os.getenv("SESSION_NAME", "stt_bot_session")
 
+# --- جزوه‌ساز هوش مصنوعی (اختیاری) ---
+# کلید را jozve.py از محیط می‌خواند:
+#   OPENROUTER_API_KEY ← رایگان از openrouter.ai/keys  (تیر رایگان: ۵۰ درخواست در روز)
+JOZVE_AUTO = os.getenv("JOZVE_AUTO", "1") == "1"   # بعد از هر تبدیل، خودکار جزوه هم ساخته شود؟
+JOZVE_ON = {}                                       # chat_id → True/False (با دستور /jozve)
+
 MAX_TEXT_IN_CHAT = 3500  # بالاتر از این مقدار، متن به‌صورت فایل txt فرستاده می‌شود
 
 if not (API_ID and API_HASH and BOT_TOKEN):
@@ -83,6 +89,13 @@ logging.basicConfig(
     handlers=[logging.FileHandler("bot.log", encoding="utf-8"), logging.StreamHandler()],
 )
 log = logging.getLogger("STT-Bot")
+
+# ================== ماژول جزوه‌ساز (اختیاری — فایل jozve.py) ==================
+try:
+    import jozve
+except Exception as _je:
+    jozve = None
+    log.warning(f"⚠️ ماژول jozve بارگذاری نشد؛ جزوه‌سازی غیرفعال می‌ماند: {_je}")
 
 BANNER = "🎙 ربات تبدیل صدا به متن فارسی (Google Speech API) — آماده به کار"
 
@@ -119,6 +132,14 @@ async def safe_edit(msg, text: str):
         await msg.edit(text)
     except Exception:
         pass
+
+
+def jozve_available() -> bool:
+    """آیا جزوه‌سازی آماده کار است؟ (ماژول + حداقل یک کلید هوش مصنوعی)"""
+    try:
+        return jozve is not None and jozve.has_provider()
+    except Exception:
+        return False
 
 
 # =========================================================
@@ -208,7 +229,7 @@ def convert_to_wav16k(input_path: str, output_path: str) -> dict:
 # =========================================================
 #  هسته اصلی: پردازش یک فایل از ابتدا تا انتها
 # =========================================================
-async def process_file(event, src_path: str, display_name: str, token: str):
+async def process_file(event, src_path: str, display_name: str, token: str, wants_jozve: bool = False):
     chat_id = event.chat_id
 
     # ---------- ۱) تبدیل به WAV 16kHz ----------
@@ -335,6 +356,62 @@ async def process_file(event, src_path: str, display_name: str, token: str):
             caption=f"📝 متن کامل «{display_name}»\n{stats}",
         )
 
+    # ---------- ۴) جزوه‌سازی با هوش مصنوعی (اختیاری) ----------
+    auto = JOZVE_ON.get(chat_id, JOZVE_AUTO)
+    if not (wants_jozve or auto):
+        return
+    if not jozve_available():
+        if wants_jozve:
+            await event.reply(
+                "📚 جزوه‌سازی هنوز فعال نشده — کلید هوش مصنوعی تنظیم نیست.\n"
+                "کلید رایگان را از openrouter.ai/keys بگیرید و به‌عنوان "
+                "متغیر محیطی OPENROUTER_API_KEY روی سرور ست کنید (راهنما: /jozve)."
+            )
+        return
+
+    status2 = await event.reply(
+        "📝 در حال ویراستاری و تهیه جزوه با هوش مصنوعی...\n"
+        "⏳ بسته به طول صدا بین ۲ تا ۱۰ دقیقه زمان می‌برد — وضعیت همین‌جا به‌روز می‌شود"
+    )
+    loop = asyncio.get_running_loop()
+
+    def _jozve_progress(info: dict):
+        """پل پیشرفت: از ترِد پردازش به پیام تلگرام (thread-safe)"""
+        try:
+            txt = jozve.render_progress(info)
+        except Exception:
+            return
+        asyncio.run_coroutine_threadsafe(safe_edit(status2, txt), loop)
+
+    out_dir = tempfile.mkdtemp(prefix="jozve_")
+    try:
+        try:
+            res = await asyncio.to_thread(jozve.produce_jozve, clean_text, display_name, out_dir, _jozve_progress)
+        except Exception as e:
+            log.exception(f"❌ خطای جزوه‌سازی: {e}")
+            await event.reply(f"❌ ساخت جزوه ناموفق بود: {str(e)[:250]}\nمتن خام بالا ارسال شده و از دست نرفته است.")
+            return
+        if not res.get("ok"):
+            log.warning(f"⚠️ جزوه‌سازی ناموفق: {res.get('error')}")
+            await event.reply(f"❌ ساخت جزوه ناموفق بود: {str(res.get('error'))[:250]}\nمتن خام بالا ارسال شده و از دست نرفته است.")
+            return
+        await safe_edit(status2, f"✅ جزوه آماده شد (موتور: {res['provider']}) — در حال ارسال فایل‌ها...")
+        cap = (f"📚 جزوه «{res['title']}» ({res.get('sections', '?')} فصل)\n"
+               f"🧠 ویراستاری کامل و ساختاردهی با هوش مصنوعی ({res['provider']})\n"
+               f"🎨 شامل تیتربندی، جدول، نمودار، نقشه ذهنی و کادرهای نکته")
+        if res.get("pdf") and os.path.exists(res["pdf"]):
+            await client.send_file(chat_id, res["pdf"], force_document=True,
+                                   caption=cap + "\n📄 فرمت PDF — آماده چاپ")
+        await client.send_file(chat_id, res["html"], force_document=True,
+                               caption=cap + "\n🌐 فرمت HTML — در هر مرورگری باز می‌شود")
+        log.info(f"📚 جزوه ارسال شد: {res['title']} [{res['provider']}]")
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
+        try:
+            await status2.delete()
+        except Exception:
+            pass
+
 
 # =========================================================
 #  هندلرها
@@ -346,13 +423,16 @@ async def start_handler(event):
         "فقط کافیست فایل بفرستید — بقیه‌اش با من:\n"
         "• 🔈 ویس (voice) و پیام‌های تصویری ویدیویی\n"
         "• 🎵 فایل صوتی: mp3 / m4a / wav / ogg / flac\n"
-        "• 🎬 فایل ویدیویی: mp4 / mkv / avi — تا ۲ گیگابایت\n\n"
+        "• 🎬 فایل ویدیویی: mp4 / mkv / avi — تا ۲ گیگابایت\n"
+        "• 📚 جزوه‌ساز هوش مصنوعی: ویراستاری متن + خروجی جزوه زیبا (PDF / HTML)\n\n"
         "⚙️ موتور تشخیص: Google Speech (همان روش برنامه دسکتاپ)\n"
         f"🧩 پردازش به‌صورت قطعات {CHUNK_SECONDS} ثانیه‌ای انجام می‌شود\n"
         "📋 فایل‌ها به‌ترتیب صف پردازش می‌شوند\n\n"
         "دستورها:\n"
         "/status — وضعیت صف و آمار\n"
-        "/cancel — لغو پردازش آخرین فایل شما"
+        "/cancel — لغو پردازش آخرین فایل شما\n"
+        "/jozve — روشن/خاموش کردن جزوه‌ساز هوش مصنوعی\n\n"
+        "💡 اگر در کپشن (متن همراه) فایل بنویسید «جزوه»، همان فایل به جزوه تبدیل می‌شود."
     )
 
 
@@ -364,7 +444,9 @@ async def status_handler(event):
         f"{'🟡 در حال پردازش یک فایل...' if busy else '🟢 آزاد — همین حالا فایل بفرستید'}\n"
         f"👥 در صف: {waiting_count} نفر\n"
         f"⏱ روشن از: {fmt_seconds(time.time() - start_time)} پیش\n"
-        f"🧩 طول قطعات: {CHUNK_SECONDS}s | زبان: {LANGUAGE} | سقف: {MAX_FILE_MB}MB"
+        f"🧩 طول قطعات: {CHUNK_SECONDS}s | زبان: {LANGUAGE} | سقف: {MAX_FILE_MB}MB\n"
+        f"📚 جزوه‌سازی: {'روشن' if JOZVE_ON.get(event.chat_id, JOZVE_AUTO) else 'خاموش'}"
+        f" | کلید AI: {'فعال ✅' if jozve_available() else 'تنظیم نشده ⛔'}"
     )
 
 
@@ -376,6 +458,38 @@ async def cancel_handler(event):
         return
     cancelled_tokens.update(tokens)
     await event.reply(f"🚫 درخواست لغو ثبت شد ({len(tokens)} فایل). اگر در صف باشد، پردازش نمی‌شود؛ اگر در حال پردازش است، چند ثانیه دیگر متوقف می‌شود.")
+
+
+@client.on(events.NewMessage(incoming=True, pattern=r"^/jozve(\s+(on|off|روشن|خاموش))?\s*$"))
+async def jozve_handler(event):
+    """روشن/خاموش کردن جزوه‌ساز + راهنمای گرفتن کلید رایگان"""
+    if not jozve_available():
+        await event.reply(
+            "📚 قابلیت جزوه‌سازی هنوز کلید ندارد!\n\n"
+            "فعال‌سازی فقط ۱ دقیقه و کاملاً رایگان است:\n"
+            "۱) به openrouter.ai بروید و حساب بسازید (ایمیل یا حساب گوگل کافی است)\n"
+            "۲) در openrouter.ai/keys دکمه «Create Key» را بزنید و کلید را کپی کنید\n"
+            "۳) در Settings → Privacy تیک پروایدرهای رایگان را فعال کنید\n"
+            "۴) روی سرور (Render/...) متغیر محیطی OPENROUTER_API_KEY را با آن کلید بسازید و Restart کنید\n\n"
+            "✅ تیر رایگان OpenRouter: ۵۰ درخواست در روز روی مدل‌های رایگان — هر جزوه حدود ۹ تا ۱۳ درخواست مصرف می‌کند؛ یعنی حدود ۴ تا ۵ جزوه ۲۰ صفحه‌ای در روز!"
+        )
+        return
+    arg = (event.pattern_match.group(1) or "").strip().lower()
+    current = JOZVE_ON.get(event.chat_id, JOZVE_AUTO)
+    if arg in ("on", "روشن"):
+        state = True
+    elif arg in ("off", "خاموش"):
+        state = False
+    else:
+        state = not current
+    JOZVE_ON[event.chat_id] = state
+    await event.reply(
+        f"📚 جزوه‌ساز هوش مصنوعی: {'✅ روشن' if state else '⛔ خاموش'}\n\n"
+        + ("از این به بعد بعد از هر تبدیل، متن ویراستاری‌شده به‌صورت جزوه‌ی زیبا (تیتر، جدول، نمودار، کادر نکته) با فرمت PDF + HTML تحویل داده می‌شود."
+           if state else
+           "فقط متن خام می‌فرستم؛ هر وقت خواستید دوباره /jozve بزنید.")
+        + "\n💡 میان‌بر: کلمه «جزوه» را در کپشن فایل بگذارید تا فقط همان فایل جزوه شود."
+    )
 
 
 @client.on(events.NewMessage(incoming=True))
@@ -403,6 +517,7 @@ async def media_handler(event):
         return
 
     display_name = file.name or ("voice-message.ogg" if mime.startswith("audio") else "video.mp4")
+    wants_jozve = "جزوه" in (msg.message or "")   # کپشن «جزوه» = اجبار جزوه‌سازی همین فایل
     token = uuid.uuid4().hex
     user_tokens.setdefault(event.sender_id, []).append(token)
 
@@ -440,7 +555,7 @@ async def media_handler(event):
             if need_queue:
                 waiting_count = max(0, waiting_count - 1)
             if token not in cancelled_tokens:
-                await process_file(event, src_path, display_name, token)
+                await process_file(event, src_path, display_name, token, wants_jozve)
             else:
                 await event.reply("🚫 این فایل قبل از شروع پردازش لغو شد.")
 
