@@ -1,4 +1,4 @@
-# 🐳 داکرفایل — برای اجرای دائمی روی Hugging Face Spaces یا هر سرور Docker
+# 🐳 داکرفایل — برای اجرای دائمی روی Render / Hugging Face Spaces / هر سرور Docker
 #
 # ساخت و اجرا:
 #   docker build -t stt-telegram-bot .
@@ -6,19 +6,31 @@
 #     -e API_ID=123456 \
 #     -e API_HASH=xxxx \
 #     -e BOT_TOKEN=xxxx:yyyy \
+#     -e GEMINI_API_KEY=xxxx \
 #     -v stt_session:/app/session \
 #     stt-telegram-bot
 
 FROM python:3.11-slim
 
-# ffmpeg برای تبدیل صدا + اصول بهداشت کانتینر
+# ffmpeg برای تبدیل صدا + کتابخانه‌های Pango/HarfBuzz برای WeasyPrint (ساخت PDF)
+# + فونت فارسی وزیرمتن برای رندر درست جزوه در PDF + DejaVu برای نمادها
 RUN apt-get update -qq \
-    && apt-get install -y -qq --no-install-recommends ffmpeg \
+    && apt-get install -y -qq --no-install-recommends \
+        ffmpeg curl ca-certificates \
+        libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libharfbuzz-subset0 \
+        fonts-dejavu-core \
+    && mkdir -p /usr/share/fonts/truetype/vazirmatn \
+    && (curl -fsSL "https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/ttf/Vazirmatn-Regular.ttf" -o /usr/share/fonts/truetype/vazirmatn/Vazirmatn-Regular.ttf \
+        || curl -fsSL "https://github.com/rastikerdar/vazirmatn/raw/v33.003/fonts/ttf/Vazirmatn-Regular.ttf" -o /usr/share/fonts/truetype/vazirmatn/Vazirmatn-Regular.ttf) \
+    && (curl -fsSL "https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/ttf/Vazirmatn-Bold.ttf" -o /usr/share/fonts/truetype/vazirmatn/Vazirmatn-Bold.ttf \
+        || curl -fsSL "https://github.com/rastikerdar/vazirmatn/raw/v33.003/fonts/ttf/Vazirmatn-Bold.ttf" -o /usr/share/fonts/truetype/vazirmatn/Vazirmatn-Bold.ttf) \
+    && (curl -fsSL "https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/ttf/Vazirmatn-Medium.ttf" -o /usr/share/fonts/truetype/vazirmatn/Vazirmatn-Medium.ttf \
+        || curl -fsSL "https://github.com/rastikerdar/vazirmatn/raw/v33.003/fonts/ttf/Vazirmatn-Medium.ttf" -o /usr/share/fonts/truetype/vazirmatn/Vazirmatn-Medium.ttf) \
+    && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 
 # --- اختیاری: مرورگر هدلس برای اسکرپینگ/اتوماسیون ---
 # اگر خواستید علاوه بر ربات، مرورگر هدلس هم اجرا کنید یکی از دو خط زیر را از کامنت خارج کنید:
-# (سelenium با کرومیوم سبک‌تر است، Playwright مدرن‌تر و پایدارتر)
 # RUN apt-get update && apt-get install -y --no-install-recommends chromium chromium-driver && rm -rf /var/lib/apt/lists/*
 # RUN pip install --no-cache-dir playwright && python -m playwright install --with-deps chromium
 
@@ -30,7 +42,7 @@ WORKDIR /app
 COPY --chown=user:user requirements.txt .
 RUN pip install -q --no-cache-dir -r requirements.txt
 
-COPY --chown=user:user bot.py .
+COPY --chown=user:user bot.py jozve.py ./
 
 # نشست ربات در این پوشه ذخیره می‌شود (با volume مount کنید تا بعد از ری‌استارت دوباره لاگین نشود)
 ENV SESSION_NAME=/app/session/stt_bot_session
