@@ -13,11 +13,14 @@
   | جدول | GFM |   ```mermaid  نقشه ذهنی/فلوچارت   ```chart  نمودار میله‌ای
 
 راهبرد ضد اهمال‌کاری:
-  ۱) برنامه‌ریز (Planner) فقط عنوان/شرح فصل‌ها را می‌سازد.
-  ۲) مرز فصل‌ها به‌صورت «قطعی» روی خود متن (مرز جمله) بریده می‌شود؛ نه با قضاوت مدل.
-  ۳) هر فراخوانی فقط یک بازهٔ مشخص را می‌نویسد و ابتدا/انتهای بازه با نقل‌قول
+  ۱) فصل‌بندی «قطعی» و محلی است (بدون مصرف درخواست LLM)؛ مرزها روی مرز جمله بریده می‌شود.
+  ۲) هر فراخوانی فقط یک بازهٔ مشخص را می‌نویسد و ابتدا/انتهای بازه با نقل‌قول
      کلمه‌به‌کلمه به مدل قفل می‌شود ⇒ هیچ بخشی از متن نمی‌تواند جا بیفتد.
-  ۴) خروجی ناقص (finish=length) با «ادامه بده» تا ۲ بار تکمیل می‌شود.
+  ۳) خروجی ناقص (finish=length) با «ادامه بده» تکمیل می‌شود.
+مدیریت سهمیهٔ رایگان (۵۰ درخواست/روز — سراسری روی همهٔ مدل‌های free):
+  - قبل از شروع، سهمیهٔ باقی‌مانده از GET /api/v1/key پرسیده می‌شود (مصرف نمی‌سوزاند).
+  - اگر سهمیه برای «کل جزوه» کافی نباشد، اصلاً شروع نمی‌شود (جزوهٔ نصفه ممنوع).
+  - خطای 429 از نوع free-models-per-day سراسری است → fallback بی‌معنی؛ فوراً قطع.
 
 کلیدها از محیط:
   OPENROUTER_API_KEY ← رایگان از openrouter.ai/keys  (تیر رایگان: ۵۰ درخواست در روز)
@@ -54,7 +57,7 @@ DEFAULT_MODELS = [
 ]
 MODELS = [m.strip() for m in os.getenv("JOZVE_MODELS", "").split(",") if m.strip()] or DEFAULT_MODELS
 
-SECTION_WORDS = int(os.getenv("JOZVE_SECTION_WORDS", "1300"))  # طول تقریبی هر بازه (کلمه)
+SECTION_WORDS = int(os.getenv("JOZVE_SECTION_WORDS", "2000"))  # طول تقریبی هر بازه (کلمه) — بزرگ‌تر = درخواست کمتر
 DEBUG_DIR = os.getenv("JOZVE_DEBUG_DIR", "")                  # اگر ست شود، پاسخ خام مدل ذخیره می‌شود
 
 
@@ -65,9 +68,10 @@ def _debug_dump(name: str, text: str):
                 f.write(text or "")
         except Exception:
             pass
-MAX_SECTIONS = int(os.getenv("JOZVE_MAX_SECTIONS", "10"))      # سقف تعداد فصل‌ها
+MAX_SECTIONS = int(os.getenv("JOZVE_MAX_SECTIONS", "8"))       # سقف تعداد فصل‌ها
 REQUEST_GAP = float(os.getenv("JOZVE_GAP", "3.0"))             # فاصله بین درخواست‌ها (سقف ۲۰/دقیقه)
 SHORT_WORDS = int(os.getenv("JOZVE_SHORT_WORDS", "600"))       # زیر این تعداد کلمه، تک‌فصلی
+FREE_DAILY = int(os.getenv("JOZVE_DAILY_BUDGET", "50"))        # سقف رایگان روزانه OpenRouter
 
 _FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
 
@@ -77,6 +81,45 @@ _FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 def has_provider() -> bool:
     """آیا کلید هوش مصنوعی تنظیم شده است؟"""
     return bool(OPENROUTER_API_KEY)
+
+
+class QuotaExhausted(Exception):
+    """سهمیهٔ روزانهٔ رایگان OpenRouter تمام شده است (سراسری — روی همهٔ مدل‌های free)."""
+
+
+# شمارندهٔ محلی درخواست‌های موفق (به‌عنوان پشتیبان وقتی API سهمیه در دسترس نیست)
+_used_today = {"day": "", "n": 0}
+
+
+def _note_usage(n: int = 1):
+    day = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+    if _used_today["day"] != day:
+        _used_today["day"] = day
+        _used_today["n"] = 0
+    _used_today["n"] += n
+
+
+def quota_used_today() -> int:
+    day = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+    return _used_today["n"] if _used_today["day"] == day else 0
+
+
+def free_quota_status() -> dict:
+    """سهمیهٔ رایگان روزانه از OpenRouter پرسیده می‌شود (GET /key — درخواست مدل نیست و سهمیه را نمی‌سوزاند)."""
+    try:
+        r = requests.get("https://openrouter.ai/api/v1/key",
+                         headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"}, timeout=20)
+        if r.status_code == 200:
+            d = r.json().get("data") or {}
+            fr = d.get("free_model_daily_requests") or {}
+            if fr:
+                return {"ok": True, "used": int(fr.get("used") or 0),
+                        "limit": int(fr.get("limit") or FREE_DAILY),
+                        "remaining": int(fr.get("remaining") or 0)}
+    except Exception as e:
+        log.warning(f"⚠️ بررسی سهمیهٔ OpenRouter ناموفق: {e}")
+    return {"ok": False, "used": quota_used_today(), "limit": FREE_DAILY,
+            "remaining": max(0, FREE_DAILY - quota_used_today())}
 
 
 def fa_num(n) -> str:
@@ -117,6 +160,7 @@ def _chat(messages, max_tokens=6000, temperature=0.2, timeout=150) -> dict:
                     if content and content.strip():
                         log.info(f"✅ {model} پاسخ داد در {time.time()-t0:.0f}s "
                                  f"(finish={ch.get('finish_reason')})")
+                        _note_usage(1)
                         return {"ok": True, "text": content.strip(), "model": model,
                                 "finish": ch.get("finish_reason") or ""}
                     errors.append(f"{model}: پاسخ خالی")
@@ -129,6 +173,11 @@ def _chat(messages, max_tokens=6000, temperature=0.2, timeout=150) -> dict:
                     errors.append(f"{model}: HTTP {r.status_code} {em}")
                     if r.status_code == 401:  # کلید غلط → ادامه بی‌فایده است
                         return {"ok": False, "error": "کلید OpenRouter نامعتبر است (HTTP 401)"}
+                    if r.status_code == 429 and "free-models-per-day" in em:
+                        # سهمیهٔ روزانهٔ رایگان «سراسری» است (روی همهٔ مدل‌های free مشترک)
+                        # → رفتن به مدل بعدی بی‌فایده است؛ فوراً بیرون می‌آییم
+                        return {"ok": False, "quota": True,
+                                "error": "سهمیهٔ روزانهٔ رایگان (۵۰ درخواست) تمام شده است"}
             except requests.exceptions.Timeout:
                 errors.append(f"{model}: timeout")
                 log.warning(f"⚠️ {model}: timeout بعد از {time.time()-t0:.0f}s")
@@ -209,97 +258,22 @@ SYSTEM_EDITOR = (
     "هرگز به چینی، انگلیسی یا زبان دیگری نوشته نشوند (اصطلاحات تخصصی لاتین اشکال ندارد).\n\n" + MARKUP_SPEC
 )
 
-PLANNER_SYSTEM = (
-    "تو طراح ساختار جزوهٔ درسی هستی. به ترنسکریپت خام نگاه کن و فصل‌بندی منطقی پیشنهاد بده.\n"
-    "خروجی فقط و فقط JSON معتبر است (بدون هیچ متن اضافه و بدون بلوک کد)، به شکل:\n"
-    '{"title": "عنوان کلی جزوه", "sections": [{"title": "عنوان فصل", '
-    '"brief": "یک جمله: این فصل چه بخشی از بحث را پوشش می‌دهد"}]}\n'
-    "قواعد: دقیقاً {k} فصل. فصل‌ها به ترتیب زمانی متن باشند و روی هم رفته کل متن از اول تا "
-    "آخر را پوشش بدهند. عناوین فارسی روان و توصیفی باشند (نه «بخش اول» و «بخش دوم»).\n"
-    "⚠️ همهٔ خروجی باید فارسی باشد — هیچ کلمهٔ چینی، انگلیسی یا روسی در عناوین نیاید."
-)
+PLANNER_SYSTEM = ""  # (منسوخ — فصل‌بندی محلی شد تا ۱ درخواست در هر جزوه صرفه‌جویی شود)
 
 
 # =========================================================
-#  برنامه‌ریز: عنوان + فصل‌بندی
+#  فصل‌بندی محلی و قطعی — بدون مصرف درخواست LLM
+#  تیتر دقیق هر فصل را خودِ مدلِ همان فصل از روی محتوایش انتخاب می‌کند.
 # =========================================================
-def _extract_plan_json(txt: str):
-    """استخراج مقاوم JSON از پاسخ مدل — با تعمیر کامای فارسی، کامای انتهایی و برش‌ها"""
-    m = re.search(r"\{[\s\S]*\}", txt)
-    if not m:
-        return None
-    raw = m.group(0)
-    attempts = [
-        raw,
-        re.sub(r"،\s*(?=[\"{\[\d])", ", ", raw),          # کامای فارسی بین فیلدها
-        re.sub(r",\s*([}\]])", r"\1", raw),               # کامای انتهایی اضافه
-        re.sub(r"،\s*(?=[\"{\[\d])", ", ", re.sub(r",\s*([}\]])", r"\1", raw)),
-    ]
-    for a in attempts:
-        try:
-            return json.loads(a)
-        except Exception:
-            continue
-    # آخرین راه: برداشت تک‌تک اشیای فصل‌ها حتی اگر کل JSON ناقص باشد
-    objs = re.findall(r'\{\s*"title"\s*:\s*"([^"]+)"\s*,?\s*(?:"brief"\s*:\s*"([^"]*)")?\s*\}', raw)
-    if objs:
-        return {"title": None,
-                "sections": [{"title": t, "brief": b or ""} for t, b in objs]}
-    return None
-
-
-def _is_bad_lang(s: str) -> bool:
-    """تشخیص عنوان غیرفارسی (چینی/روسی/...) برای فیلتر پاسخ‌های مدل"""
-    return bool(re.search(r"[\u4e00-\u9fff\u0400-\u04ff\u3040-\u30ff]", s or ""))
-
-
 def _plan_sections(text: str, display_name: str) -> dict:
     words = len(text.split())
     if words <= SHORT_WORDS:
-        return {"title": display_name, "sections": [{"title": "کل مبحث", "brief": "پوشش کامل متن"}]}
+        return {"title": display_name, "sections": [{"title": "", "brief": ""}]}
     k = max(1, min(MAX_SECTIONS, math.ceil(words / SECTION_WORDS)))
     if k == 1:
-        return {"title": display_name, "sections": [{"title": "کل مبحث", "brief": "پوشش کامل متن"}]}
-
-    r = _chat(
-        [{"role": "system", "content": PLANNER_SYSTEM.replace("{k}", str(k))},
-         {"role": "user", "content":
-          f"ترنسکریپت خام:\n\n{text[:60000]}\n\n"
-          "⛔ تحویل: تحلیل را حداکثر ۲ خط کن، بعد فقط JSON را بین دو خط "
-          "«===شروع===» و «===پایان===» بنویس."}],
-        max_tokens=4000, temperature=0.1,
-    )
-    if r.get("ok"):
-        via_m = _extract_between_markers(r["text"])
-        clean = via_m if via_m else _strip_thinking(r["text"])
-        plan = _extract_last_json(clean) or _extract_plan_json(clean)
-        if plan:
-            try:
-                secs = plan.get("sections") or []
-                clean_secs = []
-                for s in secs:
-                    if not (isinstance(s, dict) and s.get("title")):
-                        continue
-                    st = str(s["title"])[:80]
-                    if _is_bad_lang(st):           # عنوان چینی/روسی → فیلتر
-                        continue
-                    clean_secs.append({"title": st,
-                                       "brief": str(s.get("brief", ""))[:300]})
-                if len(clean_secs) >= 2:
-                    i0 = len(clean_secs)
-                    while i0 < k:
-                        clean_secs.append({"title": f"فصل {fa_num(i0+1)}", "brief": ""})
-                        i0 += 1
-                    title = plan.get("title") or display_name
-                    if _is_bad_lang(str(title)):
-                        title = display_name
-                    return {"title": str(title)[:120], "sections": clean_secs[:k]}
-            except Exception as e:
-                log.warning(f"⚠️ تحلیل JSON برنامه‌ریز ناموفق: {e}")
-    log.warning("⚠️ برنامه‌ریز پاسخ معتبر نداد — فصل‌بندی پیش‌فرض استفاده می‌شود")
-    titles = [f"فصل {fa_num(i+1)}" for i in range(k)]
+        return {"title": display_name, "sections": [{"title": "", "brief": ""}]}
     return {"title": display_name,
-            "sections": [{"title": t, "brief": ""} for t in titles]}
+            "sections": [{"title": "", "brief": ""} for _ in range(k)]}
 
 
 # =========================================================
@@ -365,8 +339,7 @@ def _strip_thinking(text: str) -> str:
 
 
 def _extract_last_json(txt: str):
-    """آخرین شیء JSON کامل حاوی sections را از متن پیدا می‌کند (reasoning ممکن است
-    JSON قلابی قبل از جواب اصلی داشته باشد)"""
+    """(منسوخ اما محفوظ) آخرین شیء JSON کامل حاوی sections را پیدا می‌کند"""
     start = txt.rfind("{")
     while start != -1:
         depth = 0
@@ -444,16 +417,20 @@ def _write_section(words, i, k, sec: dict, a: int, b: int, used: set) -> str:
     range_text = " ".join(words[a:b])
     prev_note = (" ".join(words[max(0, a - 12):a]) or "—") if a > 0 else "آغاز متن"
     next_note = (" ".join(words[b:b + 12]) or "—") if b < len(words) else "پایان متن"
+    sec_title = (sec.get("title") or "").strip()
+    title_line = (f"عنوان این فصل از قبل مشخص است: «{sec_title}» — دقیقاً همین را به کار ببر."
+                  if sec_title else
+                  "اول یک تیتر ## فارسیِ کوتاه و گویا از روی محتوای همین بازه انتخاب کن و با همان شروع کن.")
     user_msg = (
-        f"شما فصل {fa_num(i)} از {fa_num(k)} جزوه را می‌نویسید با عنوان «{sec['title']}».\n"
-        f"{('توضیح فصل: ' + sec['brief']) if sec.get('brief') else ''}\n\n"
+        f"شما فصل {fa_num(i)} از {fa_num(k)} جزوه را می‌نویسید (مجموعه‌ای پیوسته که با هم کل جزوه را می‌سازند).\n"
+        f"{title_line}\n\n"
         f"متن کامل بازهٔ تو (ویراستاری فقط روی همین):\n"
         f"⟦بازه⟧\n{range_text}\n⟦پایان بازه⟧\n\n"
         f"زمینهٔ صرفاً اطلاعاتی — این‌ها را بازنویسی نکن:\n"
         f"- پایان فصل قبل: «…{prev_note}»\n"
         f"- شروع فصل بعد: «{next_note}…»\n\n"
         f"ساختار الزامی خروجی:\n"
-        f"- دقیقاً با «## {sec['title']}» شروع کن و فقط همین یک تیتر سطح ## باشد؛ زیربخش‌ها با ###.\n"
+        f"- خروجی دقیقاً با یک خط «## عنوان فصل» شروع شود و فقط همین یک تیتر سطح ## باشد؛ زیربخش‌ها با ###.\n"
         f"- الزامی: دست‌کم یکی از جدول / کادر ::: / ```chart داخل فصل بیاید (به‌تناسب محتوا). "
         f"اگر مبحث درختی/چندشاخه است یک ```mermaid هم بزن.\n"
         f"- پوشش ۱۰۰٪ بازه، کلمه‌به‌کلمه؛ هیچ نکته‌ای جا نیفتد. ولی حجم کل فصل حدوداً هم‌حجم بازه باشد "
@@ -466,8 +443,10 @@ def _write_section(words, i, k, sec: dict, a: int, b: int, used: set) -> str:
     )
     msgs = [{"role": "system", "content": SYSTEM_EDITOR},
             {"role": "user", "content": user_msg}]
-    r = _chat(msgs, max_tokens=6000, temperature=0.2)
+    r = _chat(msgs, max_tokens=8000, temperature=0.2)
     if not r.get("ok"):
+        if r.get("quota"):
+            raise QuotaExhausted(r.get("error") or "سهمیهٔ روزانه تمام شد")
         raise RuntimeError(f"فصل {i}: {r.get('error')}")
     used.add(r["model"])
     raw = r.get("text") or ""
@@ -497,6 +476,8 @@ def _write_section(words, i, k, sec: dict, a: int, b: int, used: set) -> str:
                          "===پایان==="})
         r2 = _chat(msgs, max_tokens=8000, temperature=0.2)
         if not r2.get("ok"):
+            if r2.get("quota"):
+                raise QuotaExhausted(r2.get("error") or "سهمیهٔ روزانه تمام شد")
             log.warning(f"⚠️ ادامهٔ فصل {i} ناموفق: {r2.get('error')}")
             break
         used.add(r2["model"])
@@ -515,7 +496,7 @@ def _write_section(words, i, k, sec: dict, a: int, b: int, used: set) -> str:
         raise RuntimeError(f"فصل {i}: مدل پاسخ قابل استفاده نداد (پس از {cont} تلاش)")
 
     if not frag.startswith("##"):
-        frag = f"## {sec['title']}\n\n" + frag
+        frag = f"## {(sec_title or f'فصل {fa_num(i)}')}\n\n" + frag
     return frag
 
 
@@ -616,7 +597,7 @@ def _split_row(line: str):
     return [c.strip() for c in s.split("|")] if s else []
 
 
-def render_html(markup: str, *, title: str, source: str, mode: str = "js") -> str:
+def render_html(markup: str, *, title: str, source: str, mode: str = "js", note: str = "") -> str:
     """مارکاپ کامل جزوه → صفحهٔ HTML مستقل (mode=js تعاملی برای کاربر، img مخصوص PDF)."""
     out, toc = [], []
     h2n = 0
@@ -771,13 +752,13 @@ def render_html(markup: str, *, title: str, source: str, mode: str = "js") -> st
 <div class="wrap">
 <header class="cover">
 <div class="ct">{cover_emoji}{html.escape(title)}</div>
-<div class="cm">منبع: {html.escape(source)} &nbsp;•&nbsp; {date_str} &nbsp;•&nbsp; ویراستاری و ساختاردهی با هوش مصنوعی</div>
+<div class="cm">{html.escape(source)} &nbsp;•&nbsp; {date_str}</div>
 </header>
 {toc_html}
 <article>
 {body}
 </article>
-<footer class="foot">این جزوه با ویراستاری کامل متن خام (بدون حذف محتوا) و کمک هوش مصنوعی تهیه شده است.</footer>
+<footer class="foot">تدوین‌شده از رونویسی کامل جلسه — بدون حذف محتوا.{'&lt;br/&gt;' + html.escape(note) if note else ''}</footer>
 </div>
 {mermaid_js}
 </body>
@@ -907,14 +888,35 @@ def _produce(text: str, display_name: str, out_dir: str, progress) -> dict:
         k = len(ranges)
         plan["sections"] = plan["sections"][:k]
 
+    # ---------- پیش‌چک سهمیه (قبل از هر درخواستی — تا جزوهٔ نصفه ساخته نشود) ----------
+    qs = free_quota_status()
+    remaining = qs.get("remaining")
+    if remaining is not None and remaining <= 0:
+        return {"ok": False, "quota": True,
+                "error": "سهمیهٔ روزانهٔ رایگان (۵۰ درخواست) تمام شده است"}
+    if remaining is not None and remaining < k + 1:
+        return {"ok": False, "quota": True,
+                "error": (f"سهمیهٔ باقی‌ماندهٔ امروز ({fa_num(remaining)} درخواست) برای این جزوه کافی نیست "
+                          f"(حدود {fa_num(k + 1)} درخواست لازم است). فردا دوباره دکمه را بزن.")}
+
     used = set()
     parts = []
+    partial_note = None
     for i in range(k):
         sec = plan["sections"][i]
         a, b = ranges[i]
         _p({"stage": "section", "section": i + 1, "total": k, "title": sec["title"]})
-        parts.append(_write_section(words, i + 1, k, sec, a, b, used))
+        try:
+            parts.append(_write_section(words, i + 1, k, sec, a, b, used))
+        except QuotaExhausted as qe:
+            partial_note = f"سهمیهٔ روزانه در فصل {fa_num(i + 1)} از {fa_num(k)} تمام شد؛ این نسخه ناقص است"
+            log.warning(f"⚠️ {qe} — تحویل نسخهٔ ناقص با {len(parts)} فصل")
+            break
         time.sleep(REQUEST_GAP)
+
+    if not parts:
+        return {"ok": False, "quota": True,
+                "error": "سهمیهٔ روزانهٔ رایگان (۵۰ درخواست) تمام شده است"}
 
     markup = f"# {plan['title']}\n\n" + "\n\n".join(parts)
     words_out = len(markup.split())
@@ -928,13 +930,15 @@ def _produce(text: str, display_name: str, out_dir: str, progress) -> dict:
         f.write(markup)
     html_path = os.path.join(out_dir, base + ".html")
     with open(html_path, "w", encoding="utf-8") as f:
-        f.write(render_html(markup, title=plan["title"], source=display_name, mode="js"))
+        f.write(render_html(markup, title=plan["title"], source=display_name,
+                            mode="js", note=partial_note or ""))
 
     _p({"stage": "pdf"})
     pdf_path = None
     try:
         from weasyprint import HTML as _WHTML  # noqa
-        pdf_str = render_html(markup, title=plan["title"], source=display_name, mode="img")
+        pdf_str = render_html(markup, title=plan["title"], source=display_name,
+                              mode="img", note=partial_note or "")
         pdf_path = os.path.join(out_dir, base + ".pdf")
         _WHTML(string=pdf_str).write_pdf(pdf_path)
         if os.path.getsize(pdf_path) < 2000:
@@ -945,22 +949,24 @@ def _produce(text: str, display_name: str, out_dir: str, progress) -> dict:
 
     _p({"stage": "done"})
     return {"ok": True, "title": plan["title"], "provider": provider,
-            "html": html_path, "pdf": pdf_path, "sections": k,
-            "words_in": len(words), "words_out": words_out}
+            "html": html_path, "pdf": pdf_path, "sections": len(parts),
+            "words_in": len(words), "words_out": words_out,
+            "partial": partial_note, "requests_used": quota_used_today()}
 
 
 def render_progress(info: dict) -> str:
     """پیام وضعیت فارسی برای نمایش در چت (از bot.py صدا زده می‌شود)."""
     st = info.get("stage")
     if st == "plan":
-        return "🧭 مرحله ۱ از ۳: تحلیل متن و طراحی فصل‌بندی جزوه..."
+        return "دارم متن را مرور و فصل‌بندی می‌کنم..."
     if st == "section":
         s, t = info.get("section", 0), info.get("total", 1)
         bar = "█" * s + "░" * (t - s)
-        return (f"✍️ مرحله ۲ از ۳: نوشتن جزوه [{bar}]\n"
-                f"📖 فصل {fa_num(s)} از {fa_num(t)}: {info.get('title', '')}")
+        ttl = (info.get("title") or "").strip()
+        return (f"در حال نوشتن جزوه [{bar}]\n"
+                f"فصل {fa_num(s)} از {fa_num(t)}" + (f": {ttl}" if ttl else ""))
     if st == "render":
-        return "🎨 مرحله ۳ از ۳: چیدمان، جدول‌ها و نقشه‌های ذهنی..."
+        return "چیدمان، جدول‌ها و نقشه‌های ذهنی..."
     if st == "pdf":
-        return "📄 ساخت فایل PDF (اگر نشد، همان HTML ارسال می‌شود)..."
-    return "⏳ در حال کار روی جزوه..."
+        return "ساخت فایل PDF..."
+    return "در حال کار روی جزوه..."
