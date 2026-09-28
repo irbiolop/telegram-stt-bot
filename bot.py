@@ -38,7 +38,7 @@ import threading
 import re
 
 import requests
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, Button
 
 # =========================================================
 #  تنظیمات (پیش‌فرض‌ها قابل تغییر با متغیر محیطی)
@@ -61,8 +61,9 @@ SESSION_NAME = os.getenv("SESSION_NAME", "stt_bot_session")
 # --- جزوه‌ساز هوش مصنوعی (اختیاری) ---
 # کلید را jozve.py از محیط می‌خواند:
 #   OPENROUTER_API_KEY ← رایگان از openrouter.ai/keys  (تیر رایگان: ۵۰ درخواست در روز)
-JOZVE_AUTO = os.getenv("JOZVE_AUTO", "1") == "1"   # بعد از هر تبدیل، خودکار جزوه هم ساخته شود؟
+JOZVE_AUTO = os.getenv("JOZVE_AUTO", "0") == "1"   # بعد از هر تبدیل «خودکار» جزوه ساخته شود؟ (پیش‌فرض: فقط با دکمه)
 JOZVE_ON = {}                                       # chat_id → True/False (با دستور /jozve)
+ADMIN_ID = int(os.getenv("ADMIN_ID", "7433357700"))  # گزارش ورود/استفادهٔ کاربران به این آیدی تلگرام
 
 MAX_TEXT_IN_CHAT = 3500  # بالاتر از این مقدار، متن به‌صورت فایل txt فرستاده می‌شود
 
@@ -108,6 +109,29 @@ user_tokens = {}                # user_id → لیست توکن‌های فعا�
 cancelled_tokens = set()        # توکن‌هایی که کاربر لغو کرده است
 start_time = time.time()
 
+# --- حافظهٔ متن‌های آمادهٔ جزوه (برای دکمهٔ «تبدیل به جزوه») و کاربران ---
+USERS_FILE = "bot_users.json"   # فهرست کاربران (برای گزارش ادمین) — کنار session ذخیره می‌شود
+PENDING_JZ = {}                 # token → {"text","title","chat_id","user_id","ts","busy"}
+
+
+def _load_users() -> set:
+    try:
+        with open(USERS_FILE, "r", encoding="utf-8") as f:
+            return {int(x) for x in json.load(f)}
+    except Exception:
+        return set()
+
+
+known_users = _load_users()
+
+
+def _save_users():
+    try:
+        with open(USERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(sorted(known_users), f)
+    except Exception:
+        pass
+
 
 # =========================================================
 #  توابع کمکی عمومی
@@ -140,6 +164,139 @@ def jozve_available() -> bool:
         return jozve is not None and jozve.has_provider()
     except Exception:
         return False
+
+
+# =========================================================
+#  گزارش به ادمین + دکمهٔ جزوه
+# =========================================================
+async def notify_admin(text: str):
+    """گزارش رویدادها به آیدی ادمین.
+    (تلگرام اجازه نمی‌دهد ربات پیام اول را بفرستد؛ ادمین باید یک بار به ربات Start داده باشد)"""
+    try:
+        await client.send_message(ADMIN_ID, text, parse_mode=None)
+    except Exception as e:
+        log.warning(f"گزارش به ادمین نرفت: {e}")
+
+
+def admin_log(text: str):
+    """ارسال غیرمسدودکنندهٔ گزارش به ادمین"""
+    try:
+        asyncio.ensure_future(notify_admin(text))
+    except Exception:
+        pass
+
+
+async def user_label(event) -> str:
+    """نام و آیدی کاربر برای گزارش ادمین"""
+    try:
+        u = await event.get_sender()
+        name = " ".join(x for x in [getattr(u, "first_name", ""), getattr(u, "last_name", "")] if x).strip()
+        un = getattr(u, "username", "") or ""
+        return f"{name or '?'}" + (f" (@{un})" if un else "") + f" | id={event.sender_id}"
+    except Exception:
+        return f"id={getattr(event, 'sender_id', '?')}"
+
+
+def register_jz_pending(text: str, title: str, chat_id: int, user_id: int) -> str:
+    """متن آمادهٔ جزوه را در حافظه نگه می‌دارد و توکن دکمه را برمی‌گرداند (عمر: ۴۸ ساعت)"""
+    now = time.time()
+    for t in [t for t, v in PENDING_JZ.items() if now - v["ts"] > 48 * 3600]:
+        PENDING_JZ.pop(t, None)
+    token = uuid.uuid4().hex[:12]
+    PENDING_JZ[token] = {"text": text, "title": title, "chat_id": chat_id,
+                         "user_id": user_id, "ts": now, "busy": False}
+    return token
+
+
+def jz_buttons(token: str):
+    return [Button.inline("📚 تبدیل به جزوه", f"jz:{token}".encode())]
+
+
+# =========================================================
+#  ساخت و ارسال جزوه (هم برای دکمه، هم حالت خودکار/کپشن)
+# =========================================================
+async def run_jozve(chat_id: int, text: str, display_name: str, user_id: int = 0):
+    """جزوه را از متن آماده می‌سازد و فایل‌ها را می‌فرستد — خارج از قفل صف اجرا می‌شود."""
+    if not jozve_available():
+        await client.send_message(
+            chat_id,
+            "جزوه‌سازی هنوز کلید ندارد (متغیر OPENROUTER_API_KEY روی سرور تنظیم نشده است).",
+            parse_mode=None,
+        )
+        return
+
+    status = await client.send_message(
+        chat_id,
+        "دارم جزوه را می‌سازم... بسته به طول متن ۲ تا ۱۰ دقیقه طول می‌کشد و همین پیام به‌روز می‌شود.",
+        parse_mode=None,
+    )
+    loop = asyncio.get_running_loop()
+
+    def _prog(info: dict):
+        """پل پیشرفت: از ترِد پردازش به پیام تلگرام (thread-safe)"""
+        try:
+            txt = jozve.render_progress(info)
+        except Exception:
+            return
+        asyncio.run_coroutine_threadsafe(safe_edit(status, txt), loop)
+
+    out_dir = tempfile.mkdtemp(prefix="jozve_")
+    t0 = time.time()
+    try:
+        res = await asyncio.to_thread(jozve.produce_jozve, text, display_name, out_dir, _prog)
+
+        if not res.get("ok"):
+            if res.get("quota"):
+                await client.send_message(
+                    chat_id,
+                    "امروز سهمیهٔ رایگان جزوه‌سازی تمام شده است (۵۰ درخواست در روز — روی همهٔ مدل‌های رایگان مشترک است).\n"
+                    "نیمه‌شب به وقت جهانی (UTC) دوباره پر می‌شود؛ متن هم از دست نرفته — فردا دوباره دکمه را بزن.",
+                    parse_mode=None,
+                    buttons=jz_buttons(register_jz_pending(text, display_name, chat_id, user_id)),
+                )
+                admin_log(f"⚠️ جزوه ناموفق (سهمیهٔ روزانه) — «{display_name[:40]}» | user={user_id}")
+            else:
+                await client.send_message(
+                    chat_id,
+                    f"ساخت جزوه این بار نشد:\n{str(res.get('error'))[:200]}\n\n"
+                    "متن از دست نرفته — دوباره دکمه را بزن؛ اگر باز نشد، فایل را دوباره بفرست.",
+                    parse_mode=None,
+                    buttons=jz_buttons(register_jz_pending(text, display_name, chat_id, user_id)),
+                )
+                admin_log(f"⚠️ جزوه ناموفق — «{display_name[:40]}» | user={user_id}\n{str(res.get('error'))[:200]}")
+            return
+
+        note = res.get("partial")
+        cap = f"جزوه «{res['title']}»"
+        if note:
+            cap += f"\n({note})"
+        if res.get("pdf") and os.path.exists(res["pdf"]):
+            await client.send_file(chat_id, res["pdf"], force_document=True,
+                                   caption=cap + " — PDF")
+        await client.send_file(chat_id, res["html"], force_document=True,
+                               caption=cap + " — در هر مرورگری باز می‌شود")
+        await safe_edit(status, "جزوه آماده شد و فرستاده شد ✅")
+        admin_log(
+            f"📚 جزوه ارسال شد: «{str(res.get('title'))[:60]}»\n"
+            f"{res.get('sections', '?')} فصل | {res.get('words_in', 0)} به {res.get('words_out', 0)} کلمه | "
+            f"موتور: {res.get('provider', '?')} | زمان: {fmt_seconds(time.time() - t0)}\n"
+            f"user={user_id}"
+        )
+        log.info(f"📚 جزوه ارسال شد: {res['title']}")
+    except Exception as e:
+        log.exception(f"❌ خطای جزوه: {e}")
+        try:
+            await client.send_message(
+                chat_id,
+                f"ساخت جزوه با خطا متوقف شد:\n{str(e)[:250]}\n\nمتن از دست نرفته — دوباره دکمه را بزن.",
+                parse_mode=None,
+                buttons=jz_buttons(register_jz_pending(text, display_name, chat_id, user_id)),
+            )
+        except Exception:
+            pass
+        admin_log(f"⚠️ خطای جزوه | user={user_id}\n{str(e)[:200]}")
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
 
 
 # =========================================================
@@ -233,13 +390,13 @@ async def process_file(event, src_path: str, display_name: str, token: str, want
     chat_id = event.chat_id
 
     # ---------- ۱) تبدیل به WAV 16kHz ----------
-    status = await event.reply("🎚 در حال آماده‌سازی صدا با ffmpeg...\n(برای فایل‌های بزرگ ممکن است چند دقیقه طول بکشد)")
+    status = await event.reply("دارم صدا را آماده می‌کنم...\n(برای فایل‌های حجیم چند دقیقه طول می‌کشد)", parse_mode=None)
     wav_path = os.path.join(tempfile.mkdtemp(prefix="stt_wav_"), "audio16k.wav")
     try:
         info = await asyncio.to_thread(convert_to_wav16k, src_path, wav_path)
     except Exception as e:
         log.error(f"❌ خطای تبدیل ffmpeg: {e}")
-        await event.reply(f"❌ تبدیل صدا ناموفق بود:\n{str(e)[:300]}")
+        await event.reply(f"تبدیل صدا ناموفق بود:\n{str(e)[:300]}", parse_mode=None)
         return
     finally:
         try:
@@ -251,10 +408,9 @@ async def process_file(event, src_path: str, display_name: str, token: str, want
     total_chunks = max(1, math.ceil(duration / CHUNK_SECONDS))
     log.info(f"📦 {display_name}: طول {fmt_seconds(duration)} → {total_chunks} قطعه")
     await event.reply(
-        f"📦 فایل آماده شد!\n"
-        f"⏱ طول صدا: {fmt_seconds(duration)}\n"
-        f"🧩 تعداد قطعات: {total_chunks} قطعه × {CHUNK_SECONDS} ثانیه\n"
-        f"🚀 شروع تبدیل (خوردخورد مثل برنامه دسکتاپ)..."
+        f"صدا آماده شد — مدتش {fmt_seconds(duration)} است.\n"
+        f"در {total_chunks} قطعهٔ {CHUNK_SECONDS} ثانیه‌ای تبدیلش می‌کنم...",
+        parse_mode=None,
     )
 
     # ---------- ۲) ارسال قطعه‌ها به گوگل، یکی‌یکی ----------
@@ -263,7 +419,9 @@ async def process_file(event, src_path: str, display_name: str, token: str, want
     t0 = time.time()
     last_edit = 0.0
     cancelled = False
-    progress_msg = await event.reply("🧠 در حال تبدیل به متن...\n🧩 قطعه: 0", parse_mode=None)
+    progress_msg = await event.reply(
+        f"شروع کردم...\nقطعه: 0 از {total_chunks}", parse_mode=None
+    )
 
     with wave.open(wav_path, "rb") as w:
         rate = w.getframerate()
@@ -302,10 +460,8 @@ async def process_file(event, src_path: str, display_name: str, token: str, want
                 eta = (elapsed / idx) * (total_chunks - idx) if idx else 0
                 await safe_edit(
                     progress_msg,
-                    f"🧠 در حال تبدیل به متن...\n"
-                    f"🧩 قطعه: {idx}/{total_chunks} ({pct:.0f}٪)\n"
-                    f"⏱ پردازش‌شده: {fmt_seconds(offset_sec)} از {fmt_seconds(duration)}\n"
-                    f"⌛️ تقریباً {fmt_seconds(eta)} مانده",
+                    f"در حال تبدیل... {idx}/{total_chunks} ({pct:.0f}٪)\n"
+                    f"{fmt_seconds(offset_sec)} از {fmt_seconds(duration)} — تقریباً {fmt_seconds(eta)} مانده",
                 )
 
     # ---------- ۳) ساخت نتیجه ----------
@@ -315,102 +471,61 @@ async def process_file(event, src_path: str, display_name: str, token: str, want
         pass
 
     if cancelled:
-        await event.reply("🚫 پردازش این فایل با دستور شما لغو شد.")
+        await event.reply("پردازش این فایل را لغو کردی.", parse_mode=None)
         log.info(f"🚫 لغو شد: {display_name}")
+        admin_log(f"🚫 لغو شد: «{display_name[:50]}» | user={event.sender_id}")
         return
 
     clean_text = " ".join(t for _, t in texts).strip()
     stats = (
-        f"📊 آمار: ✅ موفق {ok} | 🔇 خالی {empty} | ❌ خطا {err}\n"
-        f"⏱ طول صوت: {fmt_seconds(duration)} | ⏳ زمان پردازش: {fmt_seconds(time.time() - t0)}"
+        f"طول صدا {fmt_seconds(duration)} • زمان تبدیل {fmt_seconds(time.time() - t0)} • "
+        f"{ok} قطعهٔ موفق" + (f" • {err} قطعه خطا داد" if err else "")
     )
-    if err:
-        stats += f"\n⚠️ {err} قطعه خطا داد؛ اگر متن ناقص است چند دقیقه دیگر دوباره بفرستید."
-    log.info(f"🏁 پایان {display_name}: {stats.splitlines()[0]}")
+    log.info(f"🏁 پایان {display_name}: {stats}")
+    _label = await user_label(event)
 
     if not clean_text:
         await event.reply(
-            "⚠️ هیچ متنی تشخیص داده نشد!\n"
-            "احتمالاً صدا ضعیف است، بدون گفتار است، یا سرویس گوگل موقتاً پاسخ نمی‌دهد.\n" + stats
+            "متنی تشخیص ندادم!\n"
+            "احتمالاً صدا ضعیف است یا گفتاری در آن نیست — اگر ناقص شد، چند دقیقه دیگر دوباره بفرست.\n"
+            + stats,
+            parse_mode=None,
         )
+        admin_log(f"⚠️ تبدیل بدون نتیجه: «{display_name[:50]}»\n{stats}\nکاربر: {_label}")
         return
+
+    # دکمهٔ «تبدیل به جزوه» — متن ۴۸ ساعت در حافظه می‌ماند تا با یک لمس جزوه شود
+    jz_token = register_jz_pending(clean_text, display_name, chat_id, event.sender_id)
+    kb = jz_buttons(jz_token)
 
     if len(clean_text) <= MAX_TEXT_IN_CHAT:
         # متن کوتاه → مستقیم در چت
-        await event.reply(f"📝 متن تشخیص داده‌شده:\n\n{clean_text}\n\n{stats}")
-    else:
-        # متن طولانی → فایل txt با تایم‌استمپ + پیش‌نمایش در چت
-        lines = [f"[{fmt_seconds(off)}] {txt}" for off, txt in texts]
-        file_text = "متن تبدیل‌شده از «%s»\n%s\n\n%s" % (
-            display_name, "-" * 40, "\n".join(lines)
+        await event.reply(
+            f"{clean_text}\n\n————————————\n{stats}",
+            parse_mode=None, buttons=kb,
         )
+    else:
+        # متن طولانی → فایل txt + پیش‌نمایش در چت
+        file_text = f"متن «{display_name}»\n\n{clean_text}"
         buf = io.BytesIO(file_text.encode("utf-8"))
         buf.name = f"{safe_filename(display_name)}.txt"
         preview = clean_text[:900].rsplit(" ", 1)[0] + " …"
         await event.reply(
-            f"📄 متن خیلی طولانی است ({len(clean_text):,} کاراکتر) — فایل کامل با تایم‌استمپ ارسال شد.\n\n"
-            f"🔍 پیش‌نمایش:\n{preview}\n\n{stats}"
+            f"متن خیلی طولانی است ({len(clean_text):,} حرف) — فایل کاملش را فرستادم.\n\n"
+            f"بخشی از اولش:\n{preview}\n\n{stats}",
+            parse_mode=None, buttons=kb,
         )
         await client.send_file(
             chat_id, buf, force_document=True,
-            caption=f"📝 متن کامل «{display_name}»\n{stats}",
+            caption=f"متن «{display_name}»",
         )
 
-    # ---------- ۴) جزوه‌سازی با هوش مصنوعی (اختیاری) ----------
+    admin_log(f"✅ تبدیل شد: «{display_name[:50]}»\n{stats}\nکاربر: {_label}")
+
+    # ---------- ۴) جزوه — فقط وقتی خودِ کاربر خواسته باشد (کپشن «جزوه» یا /jozve on) ----------
     auto = JOZVE_ON.get(chat_id, JOZVE_AUTO)
-    if not (wants_jozve or auto):
-        return
-    if not jozve_available():
-        if wants_jozve:
-            await event.reply(
-                "📚 جزوه‌سازی هنوز فعال نشده — کلید هوش مصنوعی تنظیم نیست.\n"
-                "کلید رایگان را از openrouter.ai/keys بگیرید و به‌عنوان "
-                "متغیر محیطی OPENROUTER_API_KEY روی سرور ست کنید (راهنما: /jozve)."
-            )
-        return
-
-    status2 = await event.reply(
-        "📝 در حال ویراستاری و تهیه جزوه با هوش مصنوعی...\n"
-        "⏳ بسته به طول صدا بین ۲ تا ۱۰ دقیقه زمان می‌برد — وضعیت همین‌جا به‌روز می‌شود"
-    )
-    loop = asyncio.get_running_loop()
-
-    def _jozve_progress(info: dict):
-        """پل پیشرفت: از ترِد پردازش به پیام تلگرام (thread-safe)"""
-        try:
-            txt = jozve.render_progress(info)
-        except Exception:
-            return
-        asyncio.run_coroutine_threadsafe(safe_edit(status2, txt), loop)
-
-    out_dir = tempfile.mkdtemp(prefix="jozve_")
-    try:
-        try:
-            res = await asyncio.to_thread(jozve.produce_jozve, clean_text, display_name, out_dir, _jozve_progress)
-        except Exception as e:
-            log.exception(f"❌ خطای جزوه‌سازی: {e}")
-            await event.reply(f"❌ ساخت جزوه ناموفق بود: {str(e)[:250]}\nمتن خام بالا ارسال شده و از دست نرفته است.")
-            return
-        if not res.get("ok"):
-            log.warning(f"⚠️ جزوه‌سازی ناموفق: {res.get('error')}")
-            await event.reply(f"❌ ساخت جزوه ناموفق بود: {str(res.get('error'))[:250]}\nمتن خام بالا ارسال شده و از دست نرفته است.")
-            return
-        await safe_edit(status2, f"✅ جزوه آماده شد (موتور: {res['provider']}) — در حال ارسال فایل‌ها...")
-        cap = (f"📚 جزوه «{res['title']}» ({res.get('sections', '?')} فصل)\n"
-               f"🧠 ویراستاری کامل و ساختاردهی با هوش مصنوعی ({res['provider']})\n"
-               f"🎨 شامل تیتربندی، جدول، نمودار، نقشه ذهنی و کادرهای نکته")
-        if res.get("pdf") and os.path.exists(res["pdf"]):
-            await client.send_file(chat_id, res["pdf"], force_document=True,
-                                   caption=cap + "\n📄 فرمت PDF — آماده چاپ")
-        await client.send_file(chat_id, res["html"], force_document=True,
-                               caption=cap + "\n🌐 فرمت HTML — در هر مرورگری باز می‌شود")
-        log.info(f"📚 جزوه ارسال شد: {res['title']} [{res['provider']}]")
-    finally:
-        shutil.rmtree(out_dir, ignore_errors=True)
-        try:
-            await status2.delete()
-        except Exception:
-            pass
+    if wants_jozve or auto:
+        asyncio.create_task(run_jozve(chat_id, clean_text, display_name, event.sender_id))
 
 
 # =========================================================
@@ -419,34 +534,37 @@ async def process_file(event, src_path: str, display_name: str, token: str, want
 @client.on(events.NewMessage(incoming=True, pattern=r"^/(start|help)$"))
 async def start_handler(event):
     await event.reply(
-        "🎙 **ربات تبدیل صوت و ویدیو به متن فارسی**\n\n"
-        "فقط کافیست فایل بفرستید — بقیه‌اش با من:\n"
-        "• 🔈 ویس (voice) و پیام‌های تصویری ویدیویی\n"
-        "• 🎵 فایل صوتی: mp3 / m4a / wav / ogg / flac\n"
-        "• 🎬 فایل ویدیویی: mp4 / mkv / avi — تا ۲ گیگابایت\n"
-        "• 📚 جزوه‌ساز هوش مصنوعی: ویراستاری متن + خروجی جزوه زیبا (PDF / HTML)\n\n"
-        "⚙️ موتور تشخیص: Google Speech (همان روش برنامه دسکتاپ)\n"
-        f"🧩 پردازش به‌صورت قطعات {CHUNK_SECONDS} ثانیه‌ای انجام می‌شود\n"
-        "📋 فایل‌ها به‌ترتیب صف پردازش می‌شوند\n\n"
-        "دستورها:\n"
-        "/status — وضعیت صف و آمار\n"
-        "/cancel — لغو پردازش آخرین فایل شما\n"
-        "/jozve — روشن/خاموش کردن جزوه‌ساز هوش مصنوعی\n\n"
-        "💡 اگر در کپشن (متن همراه) فایل بنویسید «جزوه»، همان فایل به جزوه تبدیل می‌شود."
+        "سلام 👋\n"
+        "فایل صوتی یا ویدیویی بفرست تا متنش را برایت دربیاورم.\n\n"
+        "• ویس و پیام تصویری\n"
+        "• فایل صوتی: mp3 ، m4a ، wav ، ogg ، flac\n"
+        "• ویدیو: mp4 ، mkv ، avi — تا ۲ گیگابایت\n\n"
+        "بعد از هر تبدیل، زیر متن دکمهٔ «تبدیل به جزوه» می‌آید؛ با آن همان متن به جزوهٔ مرتب و "
+        "تیتربندی‌شده با جدول و نمودار (PDF) تبدیل می‌شود.\n\n"
+        "/status — وضعیت\n"
+        "/cancel — لغو پردازش\n"
+        "/jozve — جزوهٔ خودکار بعد از هر تبدیل (روشن/خاموش)"
+    )
+    is_new = event.sender_id not in known_users
+    known_users.add(event.sender_id)
+    _save_users()
+    _label = await user_label(event)
+    admin_log(
+        f"👤 {'کاربر جدید' if is_new else 'ورود'}: {_label}\n"
+        f"تعداد کاربران ثبت‌شده: {len(known_users)}"
     )
 
 
 @client.on(events.NewMessage(incoming=True, pattern=r"^/status$"))
 async def status_handler(event):
     busy = queue_lock.locked()
+    st = ("الان مشغول پردازش یک فایل هستم؛ فایل بفرستی صف می‌شوی." if busy
+          else "آزادم — همین حالا فایل بفرست.")
     await event.reply(
-        f"🤖 **وضعیت ربات**\n\n"
-        f"{'🟡 در حال پردازش یک فایل...' if busy else '🟢 آزاد — همین حالا فایل بفرستید'}\n"
-        f"👥 در صف: {waiting_count} نفر\n"
-        f"⏱ روشن از: {fmt_seconds(time.time() - start_time)} پیش\n"
-        f"🧩 طول قطعات: {CHUNK_SECONDS}s | زبان: {LANGUAGE} | سقف: {MAX_FILE_MB}MB\n"
-        f"📚 جزوه‌سازی: {'روشن' if JOZVE_ON.get(event.chat_id, JOZVE_AUTO) else 'خاموش'}"
-        f" | کلید AI: {'فعال ✅' if jozve_available() else 'تنظیم نشده ⛔'}"
+        f"{st}\n"
+        f"در صف: {waiting_count} نفر\n"
+        f"روشن از: {fmt_seconds(time.time() - start_time)} پیش\n"
+        f"قطعات {CHUNK_SECONDS} ثانیه‌ای • زبان {LANGUAGE} • سقف {MAX_FILE_MB} مگابایت"
     )
 
 
@@ -462,16 +580,12 @@ async def cancel_handler(event):
 
 @client.on(events.NewMessage(incoming=True, pattern=r"^/jozve(\s+(on|off|روشن|خاموش))?\s*$"))
 async def jozve_handler(event):
-    """روشن/خاموش کردن جزوه‌ساز + راهنمای گرفتن کلید رایگان"""
+    """روشن/خاموش کردن «جزوهٔ خودکار» بعد از هر تبدیل (بدون نیاز به دکمه)"""
     if not jozve_available():
         await event.reply(
-            "📚 قابلیت جزوه‌سازی هنوز کلید ندارد!\n\n"
-            "فعال‌سازی فقط ۱ دقیقه و کاملاً رایگان است:\n"
-            "۱) به openrouter.ai بروید و حساب بسازید (ایمیل یا حساب گوگل کافی است)\n"
-            "۲) در openrouter.ai/keys دکمه «Create Key» را بزنید و کلید را کپی کنید\n"
-            "۳) در Settings → Privacy تیک پروایدرهای رایگان را فعال کنید\n"
-            "۴) روی سرور (Render/...) متغیر محیطی OPENROUTER_API_KEY را با آن کلید بسازید و Restart کنید\n\n"
-            "✅ تیر رایگان OpenRouter: ۵۰ درخواست در روز روی مدل‌های رایگان — هر جزوه حدود ۹ تا ۱۳ درخواست مصرف می‌کند؛ یعنی حدود ۴ تا ۵ جزوه ۲۰ صفحه‌ای در روز!"
+            "جزوه‌سازی هنوز کلید ندارد.\n"
+            "روی سرور باید متغیر محیطی OPENROUTER_API_KEY تنظیم شود "
+            "(کلید رایگان از openrouter.ai/keys)."
         )
         return
     arg = (event.pattern_match.group(1) or "").strip().lower()
@@ -484,12 +598,40 @@ async def jozve_handler(event):
         state = not current
     JOZVE_ON[event.chat_id] = state
     await event.reply(
-        f"📚 جزوه‌ساز هوش مصنوعی: {'✅ روشن' if state else '⛔ خاموش'}\n\n"
-        + ("از این به بعد بعد از هر تبدیل، متن ویراستاری‌شده به‌صورت جزوه‌ی زیبا (تیتر، جدول، نمودار، کادر نکته) با فرمت PDF + HTML تحویل داده می‌شود."
-           if state else
-           "فقط متن خام می‌فرستم؛ هر وقت خواستید دوباره /jozve بزنید.")
-        + "\n💡 میان‌بر: کلمه «جزوه» را در کپشن فایل بگذارید تا فقط همان فایل جزوه شود."
+        ("جزوهٔ خودکار روشن شد: بعد از هر تبدیل، جزوه هم ساخته و فرستاده می‌شود.\n"
+         "یادآوری: سهمیهٔ رایگان ۵۰ درخواست در روز است و هر جزوه چند درخواست مصرف می‌کند.")
+        if state else
+        "خاموش شد — جزوه فقط وقتی ساخته می‌شود که زیر متن، دکمهٔ «تبدیل به جزوه» را بزنی."
     )
+    _label = await user_label(event)
+    admin_log(f"⚙️ /jozve {'روشن' if state else 'خاموش'} | {_label}")
+
+
+@client.on(events.CallbackQuery(pattern=r"^jz:"))
+async def jz_button_handler(event):
+    """دکمهٔ «تبدیل به جزوه» زیر متن ترنسکریپت"""
+    token = (event.data or b"").decode("utf-8", "ignore").split(":", 1)[-1]
+    data = PENDING_JZ.get(token)
+    if not data:
+        await event.answer(
+            "این متن دیگر در حافظه نیست (ربات ری‌استارت شده). فایل را دوباره بفرست و دکمه را بزن.",
+            alert=True,
+        )
+        return
+    if data.get("busy"):
+        await event.answer("دارم همین حالا جزوه‌اش را می‌سازم، صبر کن...", alert=True)
+        return
+    data["busy"] = True
+    try:
+        await event.answer("شروع کردم — چند دقیقه طول می‌کشد.")
+    except Exception:
+        pass
+    _label = await user_label(event)
+    admin_log(f"📚 درخواست جزوه (دکمه) — «{data['title'][:40]}» | {_label}")
+    try:
+        await run_jozve(data["chat_id"], data["text"], data["title"], data["user_id"])
+    finally:
+        data["busy"] = False
 
 
 @client.on(events.NewMessage(incoming=True))
@@ -511,28 +653,31 @@ async def media_handler(event):
     size_mb = (file.size or 0) / (1024 * 1024)
     if size_mb > MAX_FILE_MB:
         await event.reply(
-            f"⚠️ حجم فایل {size_mb:.0f}MB است و بیشتر از سقف مجاز ({MAX_FILE_MB}MB)!"
-            "\nفایل‌های تا ۲ گیگابایت را می‌توانم پردازش کنم."
+            f"حجم فایل {size_mb:.0f} مگابایت است؛ بیشتر از سقف ({MAX_FILE_MB} مگابایت) نمی‌توانم بگیرم.",
+            parse_mode=None,
         )
         return
 
     display_name = file.name or ("voice-message.ogg" if mime.startswith("audio") else "video.mp4")
-    wants_jozve = "جزوه" in (msg.message or "")   # کپشن «جزوه» = اجبار جزوه‌سازی همین فایل
+    wants_jozve = "جزوه" in (msg.message or "")   # کپشن «جزوه» = جزوه‌سازی خودکارِ همین فایل
     token = uuid.uuid4().hex
     user_tokens.setdefault(event.sender_id, []).append(token)
+    _label = await user_label(event)
+    admin_log(f"📥 فایل: «{display_name[:50]}» ({size_mb:.0f}MB) | از: {_label}")
 
     # ---------- صف ----------
     need_queue = queue_lock.locked()
     if need_queue:
         waiting_count += 1
         await event.reply(
-            f"🔢 فایل شما در صف قرار گرفت (نوبت {waiting_count}).\n"
-            "⏳ به‌ترتیب پردازش می‌شود — پیام لغو: /cancel"
+            f"فایل تو صف شد (نوبت {waiting_count}).\n"
+            "به‌ترتیب پردازش می‌شود — لغو: /cancel",
+            parse_mode=None,
         )
 
     tmp_dir = tempfile.mkdtemp(prefix="stt_dl_")
     src_path = os.path.join(tmp_dir, f"src{file.ext or ''}")
-    status = await event.reply("⏳ در حال دریافت فایل از تلگرام... 0%")
+    status = await event.reply("دارم فایل را می‌گیرم... 0٪", parse_mode=None)
 
     try:
         # ---------- دانلود با پیشرفت زنده ----------
@@ -544,10 +689,10 @@ async def media_handler(event):
                 dl_last["t"] = now
                 pct = current * 100.0 / max(1, total)
                 mb = current / (1024 * 1024)
-                asyncio.ensure_future(safe_edit(status, f"⏳ در حال دریافت فایل از تلگرام... {pct:.0f}% ({mb:.0f}MB)"))
+                asyncio.ensure_future(safe_edit(status, f"دارم فایل را می‌گیرم... {pct:.0f}٪ ({mb:.0f}MB)"))
 
         await msg.download_media(file=src_path, progress_callback=dl_progress)
-        await safe_edit(status, "✅ دانلود کامل شد.")
+        await safe_edit(status, "فایل رسید ✅")
         log.info(f"📥 دانلود شد: {display_name} ({size_mb:.0f}MB)")
 
         # ---------- پردازش ترتیبی ----------
@@ -557,11 +702,12 @@ async def media_handler(event):
             if token not in cancelled_tokens:
                 await process_file(event, src_path, display_name, token, wants_jozve)
             else:
-                await event.reply("🚫 این فایل قبل از شروع پردازش لغو شد.")
+                await event.reply("این فایل قبل از شروع پردازش لغو شد.", parse_mode=None)
 
     except Exception as e:
         log.exception(f"❌ خطای کلی در پردازش {display_name}: {e}")
-        await event.reply(f"❌ خطای غیرمنتظره در پردازش فایل:\n{str(e)[:300]}")
+        await event.reply(f"خطای غیرمنتظره در پردازش فایل:\n{str(e)[:300]}", parse_mode=None)
+        admin_log(f"⚠️ خطای پردازش «{display_name[:40]}»\n{str(e)[:200]}\nکاربر: {_label}")
     finally:
         # پاکسازی فایل‌های موقت و آزادسازی نوبت
         try:
