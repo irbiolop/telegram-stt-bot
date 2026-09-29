@@ -17,14 +17,18 @@
   ۲) هر فراخوانی فقط یک بازهٔ مشخص را می‌نویسد و ابتدا/انتهای بازه با نقل‌قول
      کلمه‌به‌کلمه به مدل قفل می‌شود ⇒ هیچ بخشی از متن نمی‌تواند جا بیفتد.
   ۳) خروجی ناقص (finish=length) با «ادامه بده» تکمیل می‌شود.
-مدیریت سهمیهٔ رایگان (۵۰ درخواست/روز — سراسری روی همهٔ مدل‌های free):
-  - قبل از شروع، سهمیهٔ باقی‌مانده از GET /api/v1/key پرسیده می‌شود (مصرف نمی‌سوزاند).
+مدیریت سهمیهٔ رایگان و کلیدها:
+  - سهمیهٔ هر کلید ۵۰ درخواست/روز است (سراسری روی همهٔ مدل‌های free همان کلید).
+  - قبل از شروع، سهمیهٔ باقی‌مانده از GET /api/v1/key پرسیده می‌شود (مصرف نمی‌سوزاند)؛
+    با چند کلید، جمع سهمیهٔ همهٔ کلیدها حساب می‌شود.
   - اگر سهمیه برای «کل جزوه» کافی نباشد، اصلاً شروع نمی‌شود (جزوهٔ نصفه ممنوع).
-  - خطای 429 از نوع free-models-per-day سراسری است → fallback بی‌معنی؛ فوراً قطع.
+  - 429 از نوع free-models-per-day یعنی سهمیهٔ «این کلید» تمام است → خودکار به کلید بعدی می‌رود.
 
 کلیدها از محیط:
-  OPENROUTER_API_KEY ← رایگان از openrouter.ai/keys  (تیر رایگان: ۵۰ درخواست در روز)
-  JOZVE_MODELS       ← اختیاری؛ لیست مدل‌های جدا با کاما
+  OPENROUTER_API_KEY         ← کلید اصلی (رایگان از openrouter.ai/keys)
+  OPENROUTER_API_KEY_BACKUP  ← کلید پشتیبان؛ با تمام‌شدن سهمیهٔ اصلی خودکار به کار می‌رود
+  OPENROUTER_API_KEYS        ← شکل دیگر: چند کلید جدا با کاما (اولی اصلی)
+  JOZVE_MODELS               ← اختیاری؛ لیست مدل‌های جدا با کاما
 """
 
 import os
@@ -36,6 +40,7 @@ import html
 import base64
 import logging
 import datetime
+import threading
 
 import requests
 
@@ -44,9 +49,38 @@ log = logging.getLogger("Jozve")
 # =========================================================
 #  تنظیمات
 # =========================================================
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_REFERER = os.getenv("OPENROUTER_REFERER", "https://github.com/irbiolop/telegram-stt-bot")
+
+
+def _load_keys():
+    """لیست کلیدهای OpenRouter — کلید نخست اصلی، بقیه پشتیبان."""
+    multi = os.getenv("OPENROUTER_API_KEYS", "").strip()
+    if multi:
+        keys = [k.strip() for k in multi.split(",") if k.strip()]
+    else:
+        primary = os.getenv("OPENROUTER_API_KEY", "").strip()
+        backup = os.getenv("OPENROUTER_API_KEY_BACKUP", "").strip()
+        keys = [k for k in (primary, backup) if k]
+    return list(dict.fromkeys(keys))   # حذف تکراری با حفظ ترتیب
+
+
+KEYS = _load_keys()
+OPENROUTER_API_KEY = KEYS[0] if KEYS else ""   # سازگاری با ارجاع‌های قدیمی
+
+# چرخش کلید: وقتی سهمیهٔ یکی تمام شد یا نامعتبر شد، بعدی به کار می‌رود
+_key_idx = {"i": 0}
+_key_lock = threading.Lock()
+
+
+def _current_key() -> str:
+    return KEYS[_key_idx["i"] % len(KEYS)]
+
+
+def _rotate_key():
+    with _key_lock:
+        _key_idx["i"] = (_key_idx["i"] + 1) % len(KEYS)
+        log.info(f"🔁 رفتن به کلید شمارهٔ {_key_idx['i'] + 1} از {len(KEYS)}")
 
 # زنجیرهٔ مدل‌های رایگان — اولی اصلی، بقیه پشتیبان (اگر یکی شلوغ/خطا داد می‌پریم بعدی)
 DEFAULT_MODELS = [
@@ -79,8 +113,8 @@ _FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 
 
 def has_provider() -> bool:
-    """آیا کلید هوش مصنوعی تنظیم شده است؟"""
-    return bool(OPENROUTER_API_KEY)
+    """آیا دست‌کم یک کلید OpenRouter تنظیم شده است؟"""
+    return bool(KEYS)
 
 
 class QuotaExhausted(Exception):
@@ -105,21 +139,29 @@ def quota_used_today() -> int:
 
 
 def free_quota_status() -> dict:
-    """سهمیهٔ رایگان روزانه از OpenRouter پرسیده می‌شود (GET /key — درخواست مدل نیست و سهمیه را نمی‌سوزاند)."""
-    try:
-        r = requests.get("https://openrouter.ai/api/v1/key",
-                         headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"}, timeout=20)
-        if r.status_code == 200:
-            d = r.json().get("data") or {}
-            fr = d.get("free_model_daily_requests") or {}
-            if fr:
-                return {"ok": True, "used": int(fr.get("used") or 0),
-                        "limit": int(fr.get("limit") or FREE_DAILY),
-                        "remaining": int(fr.get("remaining") or 0)}
-    except Exception as e:
-        log.warning(f"⚠️ بررسی سهمیهٔ OpenRouter ناموفق: {e}")
-    return {"ok": False, "used": quota_used_today(), "limit": FREE_DAILY,
-            "remaining": max(0, FREE_DAILY - quota_used_today())}
+    """سهمیهٔ رایگان روزانه از OpenRouter پرسیده می‌شود (GET /key — درخواست مدل نیست و سهمیه را نمی‌سوزاند).
+    با چند کلید، جمع سهمیهٔ همهٔ کلیدها حساب می‌شود."""
+    used = remaining = 0
+    limit = 0
+    ok_any = False
+    for key in KEYS:
+        try:
+            r = requests.get("https://openrouter.ai/api/v1/key",
+                             headers={"Authorization": f"Bearer {key}"}, timeout=20)
+            if r.status_code == 200:
+                fr = (r.json().get("data") or {}).get("free_model_daily_requests") or {}
+                if fr:
+                    ok_any = True
+                    used += int(fr.get("used") or 0)
+                    limit += int(fr.get("limit") or FREE_DAILY)
+                    remaining += int(fr.get("remaining") or 0)
+        except Exception as e:
+            log.warning(f"⚠️ بررسی سهمیهٔ OpenRouter ناموفق: {e}")
+    if ok_any:
+        return {"ok": True, "used": used, "limit": limit, "remaining": remaining}
+    cap = len(KEYS) * FREE_DAILY
+    return {"ok": False, "used": quota_used_today(), "limit": cap,
+            "remaining": max(0, cap - quota_used_today())}
 
 
 def fa_num(n) -> str:
@@ -129,61 +171,81 @@ def fa_num(n) -> str:
 # =========================================================
 #  هستهٔ ارتباط با OpenRouter (با fallback بین مدل‌ها)
 # =========================================================
+def _post_once(model, messages, max_tokens, temperature, timeout) -> dict:
+    """یک فراخوانی مدل با کلید فعلی؛ اگر سهمیهٔ کلید تمام/کلید نامعتبر بود، کلید بعدی امتحان می‌شود."""
+    for _attempt in range(max(1, len(KEYS))):
+        headers = {
+            "Authorization": f"Bearer {_current_key()}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": OPENROUTER_REFERER,
+            "X-Title": "Telegram STT Jozve Bot",
+        }
+        try:
+            t0 = time.time()
+            log.info(f"🤖 درخواست به {model} ...")
+            r = requests.post(
+                OPENROUTER_URL, headers=headers, timeout=timeout,
+                json={"model": model, "messages": messages,
+                      "max_tokens": max_tokens, "temperature": temperature,
+                      "frequency_penalty": 0.3, "presence_penalty": 0.2},
+            )
+            if r.status_code == 200:
+                d = r.json()
+                ch = (d.get("choices") or [{}])[0]
+                msg = ch.get("message") or {}
+                content = msg.get("content")
+                if isinstance(content, list):  # بعضی پروایدرها آرایهٔ segment می‌دهند
+                    content = "".join(seg.get("text", "") for seg in content
+                                      if isinstance(seg, dict))
+                if content and content.strip():
+                    log.info(f"✅ {model} پاسخ داد در {time.time()-t0:.0f}s "
+                             f"(finish={ch.get('finish_reason')})")
+                    _note_usage(1)
+                    return {"ok": True, "text": content.strip(), "model": model,
+                            "finish": ch.get("finish_reason") or ""}
+                return {"ok": False, "status": 200, "error": "پاسخ خالی"}
+            try:
+                em = ((r.json().get("error") or {}).get("message") or "")[:110]
+            except Exception:
+                em = r.text[:110]
+            if r.status_code == 429 and "free-models-per-day" in em:
+                # سهمیهٔ «این کلید» تمام شده → همان مدل با کلید بعدی ادامه می‌یابد
+                if len(KEYS) > 1:
+                    log.warning("⚠️ سهمیهٔ کلید فعلی تمام شد — کلید بعدی امتحان می‌شود")
+                    _rotate_key()
+                    continue
+                return {"ok": False, "quota": True,
+                        "error": "سهمیهٔ روزانهٔ رایگان به پایان رسیده است"}
+            if r.status_code == 401:
+                if len(KEYS) > 1:
+                    log.warning("⚠️ کلید OpenRouter نامعتبر است — کلید بعدی امتحان می‌شود")
+                    _rotate_key()
+                    continue
+                return {"ok": False, "error": "کلید OpenRouter نامعتبر است (HTTP 401)"}
+            return {"ok": False, "status": r.status_code,
+                    "error": f"HTTP {r.status_code} {em}"}
+        except requests.exceptions.Timeout:
+            return {"ok": False, "status": 0, "error": "timeout"}
+        except Exception as e:
+            return {"ok": False, "status": 0, "error": str(e)[:110]}
+    # همهٔ کلیدها سهمیه‌شان تمام شده است
+    return {"ok": False, "quota": True,
+            "error": "سهمیهٔ روزانهٔ همهٔ کلیدها به پایان رسیده است"}
+
+
 def _chat(messages, max_tokens=6000, temperature=0.2, timeout=150) -> dict:
-    """یک درخواست چت به OpenRouter؛ در خطا/۴۲۹ بین مدل‌های رایگان جابه‌جا می‌شود."""
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": OPENROUTER_REFERER,
-        "X-Title": "Telegram STT Jozve Bot",
-    }
+    """یک درخواست چت به OpenRouter؛ در خطا/۴۲۹ بین کلیدها و مدل‌های رایگان جابه‌جا می‌شود."""
+    if not KEYS:
+        return {"ok": False, "error": "کلید OpenRouter تنظیم نشده است"}
     errors = []
     for _round in range(2):  # دو دور کامل روی لیست مدل‌ها
         for model in MODELS:
-            try:
-                t0 = time.time()
-                log.info(f"🤖 درخواست به {model} ...")
-                r = requests.post(
-                    OPENROUTER_URL, headers=headers, timeout=timeout,
-                    json={"model": model, "messages": messages,
-                          "max_tokens": max_tokens, "temperature": temperature,
-                          "frequency_penalty": 0.3, "presence_penalty": 0.2},
-                )
-                if r.status_code == 200:
-                    d = r.json()
-                    ch = (d.get("choices") or [{}])[0]
-                    msg = ch.get("message") or {}
-                    content = msg.get("content")
-                    if isinstance(content, list):  # بعضی پروایدرها آرایهٔ segment می‌دهند
-                        content = "".join(seg.get("text", "") for seg in content
-                                          if isinstance(seg, dict))
-                    if content and content.strip():
-                        log.info(f"✅ {model} پاسخ داد در {time.time()-t0:.0f}s "
-                                 f"(finish={ch.get('finish_reason')})")
-                        _note_usage(1)
-                        return {"ok": True, "text": content.strip(), "model": model,
-                                "finish": ch.get("finish_reason") or ""}
-                    errors.append(f"{model}: پاسخ خالی")
-                    log.warning(f"⚠️ {model}: پاسخ خالی")
-                else:
-                    try:
-                        em = ((r.json().get("error") or {}).get("message") or "")[:110]
-                    except Exception:
-                        em = r.text[:110]
-                    errors.append(f"{model}: HTTP {r.status_code} {em}")
-                    if r.status_code == 401:  # کلید غلط → ادامه بی‌فایده است
-                        return {"ok": False, "error": "کلید OpenRouter نامعتبر است (HTTP 401)"}
-                    if r.status_code == 429 and "free-models-per-day" in em:
-                        # سهمیهٔ روزانهٔ رایگان «سراسری» است (روی همهٔ مدل‌های free مشترک)
-                        # → رفتن به مدل بعدی بی‌فایده است؛ فوراً بیرون می‌آییم
-                        return {"ok": False, "quota": True,
-                                "error": "سهمیهٔ روزانهٔ رایگان (۵۰ درخواست) تمام شده است"}
-            except requests.exceptions.Timeout:
-                errors.append(f"{model}: timeout")
-                log.warning(f"⚠️ {model}: timeout بعد از {time.time()-t0:.0f}s")
-            except Exception as e:
-                errors.append(f"{model}: {str(e)[:110]}")
-                log.warning(f"⚠️ {model}: {str(e)[:110]}")
+            r = _post_once(model, messages, max_tokens, temperature, timeout)
+            if r.get("ok"):
+                return r
+            if r.get("quota"):   # سهمیهٔ همهٔ کلیدها تمام است — رفتن به مدل بعدی بی‌فایده است
+                return r
+            errors.append(f"{model}: {r.get('error')}")
             time.sleep(1.5)
         time.sleep(2.0)
     return {"ok": False, "error": " | ".join(errors[:6])}
@@ -878,7 +940,7 @@ def _produce(text: str, display_name: str, out_dir: str, progress) -> dict:
     text = re.sub(r"\s+", " ", text).strip()
     words = text.split()
     if len(words) < 30:
-        return {"ok": False, "error": "متن برای جزوه‌سازی خیلی کوتاه است"}
+        return {"ok": False, "error": "متن برای ساخت جزوه بسیار کوتاه است"}
 
     _p({"stage": "plan"})
     plan = _plan_sections(text, display_name)
@@ -893,11 +955,11 @@ def _produce(text: str, display_name: str, out_dir: str, progress) -> dict:
     remaining = qs.get("remaining")
     if remaining is not None and remaining <= 0:
         return {"ok": False, "quota": True,
-                "error": "سهمیهٔ روزانهٔ رایگان (۵۰ درخواست) تمام شده است"}
+                "error": "سهمیهٔ روزانهٔ رایگان به پایان رسیده است"}
     if remaining is not None and remaining < k + 1:
         return {"ok": False, "quota": True,
                 "error": (f"سهمیهٔ باقی‌ماندهٔ امروز ({fa_num(remaining)} درخواست) برای این جزوه کافی نیست "
-                          f"(حدود {fa_num(k + 1)} درخواست لازم است). فردا دوباره دکمه را بزن.")}
+                          f"(حدود {fa_num(k + 1)} درخواست لازم است). فردا مجدداً دکمه را بفشارید.")}
 
     used = set()
     parts = []
@@ -909,14 +971,14 @@ def _produce(text: str, display_name: str, out_dir: str, progress) -> dict:
         try:
             parts.append(_write_section(words, i + 1, k, sec, a, b, used))
         except QuotaExhausted as qe:
-            partial_note = f"سهمیهٔ روزانه در فصل {fa_num(i + 1)} از {fa_num(k)} تمام شد؛ این نسخه ناقص است"
+            partial_note = f"سهمیهٔ روزانه در فصل {fa_num(i + 1)} از {fa_num(k)} به پایان رسید؛ این نسخه ناقص است"
             log.warning(f"⚠️ {qe} — تحویل نسخهٔ ناقص با {len(parts)} فصل")
             break
         time.sleep(REQUEST_GAP)
 
     if not parts:
         return {"ok": False, "quota": True,
-                "error": "سهمیهٔ روزانهٔ رایگان (۵۰ درخواست) تمام شده است"}
+                "error": "سهمیهٔ روزانهٔ رایگان به پایان رسیده است"}
 
     markup = f"# {plan['title']}\n\n" + "\n\n".join(parts)
     words_out = len(markup.split())
@@ -958,7 +1020,7 @@ def render_progress(info: dict) -> str:
     """پیام وضعیت فارسی برای نمایش در چت (از bot.py صدا زده می‌شود)."""
     st = info.get("stage")
     if st == "plan":
-        return "دارم متن را مرور و فصل‌بندی می‌کنم..."
+        return "در حال مرور متن و فصل‌بندی..."
     if st == "section":
         s, t = info.get("section", 0), info.get("total", 1)
         bar = "█" * s + "░" * (t - s)
@@ -966,7 +1028,7 @@ def render_progress(info: dict) -> str:
         return (f"در حال نوشتن جزوه [{bar}]\n"
                 f"فصل {fa_num(s)} از {fa_num(t)}" + (f": {ttl}" if ttl else ""))
     if st == "render":
-        return "چیدمان، جدول‌ها و نقشه‌های ذهنی..."
+        return "در حال چیدمان، جدول‌ها و نقشه‌های ذهنی..."
     if st == "pdf":
-        return "ساخت فایل PDF..."
+        return "در حال ساخت فایل PDF..."
     return "در حال کار روی جزوه..."
