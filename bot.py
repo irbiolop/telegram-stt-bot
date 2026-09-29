@@ -68,6 +68,20 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "7433357700"))  # گزارش ورود/اس�
 
 MAX_TEXT_IN_CHAT = 3500  # بالاتر از این مقدار، متن به‌صورت فایل txt فرستاده می‌شود
 
+# --- تنظیم هر تبدیل: انتخاب زبان + حذف قطعات (گام‌به‌گام با دکمه) ---
+# زبان‌های قابل انتخاب هنگام ارسال فایل (کد گوگل ← نام نمایشی)
+LANGUAGES = {
+    "fa": ("fa-IR", "🇮🇷 فارسی"),
+    "en": ("en-US", "🇬🇧 انگلیسی"),
+    "ar": ("ar-SA", "🇸🇦 عربی"),
+    "tr": ("tr-TR", "🇹🇷 ترکی"),
+    "ru": ("ru-RU", "🇷🇺 روسی"),
+    "fr": ("fr-FR", "🇫🇷 فرانسوی"),
+}
+PENDING_SETUP = {}   # token → وضعیت تنظیم هر فایل (زبان، حذفیات، مراحل)
+user_pending = {}    # user_id → {"token", "stage"} — مسیریابی ورودی متنی دقیقه‌ها
+SETUP_TTL = 2 * 3600  # عمر تنظیم نیمه‌کاره: ۲ ساعت
+
 if not (API_ID and API_HASH and BOT_TOKEN):
     print("=" * 62)
     print("❌ خطا: API_ID / API_HASH / BOT_TOKEN تنظیم نشده‌اند!")
@@ -211,6 +225,143 @@ def register_jz_pending(text: str, title: str, chat_id: int, user_id: int) -> st
 
 def jz_buttons(token: str):
     return [Button.inline("📚 تبدیل به جزوه", f"jz:{token}".encode())]
+
+
+# =========================================================
+#  تنظیم تبدیل: پارس دقیقه‌های حذفی + محاسبهٔ بازه‌های باقی‌مانده
+# =========================================================
+_FA_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+
+
+def _hms_to_sec(tok: str):
+    """«M» (دقیقه) یا «M:SS» یا «H:MM:SS» → ثانیه"""
+    tok = (tok or "").strip()
+    if not tok:
+        return None
+    parts = tok.split(":")
+    if len(parts) > 3 or not all(p.isdigit() for p in parts):
+        return None
+    nums = [int(p) for p in parts]
+    if len(nums) == 1:
+        return nums[0] * 60          # فقط دقیقه
+    if len(nums) == 2:
+        return nums[0] * 60 + nums[1]   # دقیقه:ثانیه
+    return nums[0] * 3600 + nums[1] * 60 + nums[2]  # ساعت:دقیقه:ثانیه
+
+
+def parse_skip_ranges(raw: str):
+    """ورودی متنی کاربر برای دقیقه‌های حذفی → (بازه‌ها، پیام خطا).
+    نمونه‌های قابل قبول:
+      3-7   |   ۳ تا ۷   |   2:30 تا 4:10   |   3-7، 12-15   |   از 10 تا 12:30 و 15 تا 16
+    """
+    txt = (raw or "").translate(_FA_DIGITS).replace("\u200c", " ").strip()
+    if not txt:
+        return None, "متن خالی است."
+    # حذف کلمه‌های اضافی رایج (دقیقه، بخش، قسمت، از، لطفا)
+    txt = re.sub(r"(?:دقیقه|مینوت|بخش|قسمت|لطفا)", " ", txt)
+    txt = re.sub(r"\bاز\b", " ", txt)
+    txt = txt.replace("(", " ").replace(")", " ").replace("[", " ").replace("]", " ")
+    parts = [p.strip() for p in re.split(r"[،,;؛\n+]+|\s+و\s+", txt) if p.strip()]
+    if not parts:
+        return None, "بازه‌ای پیدا نشد."
+    ranges = []
+    for part in parts:
+        m = re.match(
+            r"^(\d{1,2}(?::\d{1,2}){0,2})\s*(?:تا|[-–—~ـ])\s*(\d{1,2}(?::\d{1,2}){0,2})$",
+            part,
+        )
+        if not m:
+            return None, f"قسمت «{part[:30]}» قابل قبول نیست."
+        a, b = _hms_to_sec(m.group(1)), _hms_to_sec(m.group(2))
+        if a is None or b is None or b <= a:
+            return None, f"قسمت «{part[:30]}» درست نیست؛ پایان بازه باید بعد از شروع آن باشد."
+        if b - a < 5:
+            return None, "هر بازهٔ حذفی باید دست‌کم ۵ ثانیه باشد."
+        ranges.append((a, min(b, 24 * 3600)))
+    if len(ranges) > 30:
+        return None, "بیش از ۳۰ بازه در یک فایل مجاز نیست."
+    return ranges, ""
+
+
+def merge_ranges(rs):
+    """بازه‌های هم‌پوشان را ادغام و مرتب می‌کند."""
+    rs = sorted((max(0.0, float(a)), float(b)) for a, b in (rs or []) if b > a)
+    out = []
+    for a, b in rs:
+        if out and a <= out[-1][1] + 1e-9:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
+
+
+def compute_keep_segments(duration: float, skip_ranges):
+    """با احتساب بازه‌های حذفی، بازه‌های باقی‌ماندهٔ صدا را برمی‌گرداند."""
+    keeps, cur = [], 0.0
+    for a, b in merge_ranges(skip_ranges or []):
+        if a > cur:
+            keeps.append((cur, min(a, duration)))
+        cur = max(cur, b)
+        if cur >= duration:
+            break
+    if cur < duration:
+        keeps.append((cur, duration))
+    return [(a, b) for a, b in keeps if b - a >= 1.0]
+
+
+# =========================================================
+#  وضعیت تنظیم نیمه‌کاره (زبان/حذفیات) + دکمه‌هایش
+# =========================================================
+def _prune_setups():
+    now = time.time()
+    expired = [t for t, v in PENDING_SETUP.items() if now - v.get("ts", 0) > SETUP_TTL]
+    for t in expired:
+        PENDING_SETUP.pop(t, None)
+    for uid, up in list(user_pending.items()):
+        if up.get("token") in expired:
+            user_pending.pop(uid, None)
+
+
+def get_setup(token: str):
+    _prune_setups()
+    return PENDING_SETUP.get(token)
+
+
+def lang_buttons(token: str):
+    codes = list(LANGUAGES)
+    rows = []
+    for i in range(0, len(codes), 3):
+        rows.append([Button.inline(LANGUAGES[c][1], f"lang:{token}:{c}".encode())
+                     for c in codes[i:i + 3]])
+    return rows
+
+
+def skip_q_buttons(token: str):
+    return [[Button.inline("✂️ حذف قطعات", f"skipq:{token}".encode()),
+             Button.inline("▶️ بدون حذف، ادامه", f"noskip:{token}".encode())],
+            [Button.inline("✖️ انصراف", f"cx:{token}".encode())]]
+
+
+def skip_input_buttons(token: str):
+    return [[Button.inline("↩️ بازگشت", f"backq:{token}".encode())]]
+
+
+def confirm_buttons(token: str):
+    return [[Button.inline("✅ تأیید و شروع تبدیل", f"go:{token}".encode()),
+             Button.inline("✖️ انصراف", f"cx:{token}".encode())]]
+
+
+def confirm_text(st: dict) -> str:
+    ranges = st.get("skip_ranges") or []
+    skip_txt = ("، ".join(f"{fmt_seconds(a)} تا {fmt_seconds(b)}" for a, b in ranges)
+                if ranges else "ندارد")
+    return (
+        "خلاصهٔ تنظیمات تبدیل:\n"
+        f"• فایل: {str(st.get('display_name'))[:60]} ({st.get('size_mb', 0):.0f} مگابایت)\n"
+        f"• زبان گفتار: {st.get('lang_name', '—')}\n"
+        f"• بخش‌های حذفی: {skip_txt}\n\n"
+        "با زدن «تأیید و شروع تبدیل»، دریافت و تبدیل آغاز می‌شود."
+    )
 
 
 # =========================================================
@@ -388,7 +539,8 @@ def convert_to_wav16k(input_path: str, output_path: str) -> dict:
 # =========================================================
 #  هسته اصلی: پردازش یک فایل از ابتدا تا انتها
 # =========================================================
-async def process_file(event, src_path: str, display_name: str, token: str, wants_jozve: bool = False):
+async def process_file(event, src_path: str, display_name: str, token: str, wants_jozve: bool = False,
+                       lang_code: str = "fa-IR", skip_ranges=None, label: str = ""):
     chat_id = event.chat_id
 
     # ---------- ۱) تبدیل به WAV 16kHz ----------
@@ -407,11 +559,24 @@ async def process_file(event, src_path: str, display_name: str, token: str, want
             pass
 
     duration = info["duration"]
-    total_chunks = max(1, math.ceil(duration / CHUNK_SECONDS))
-    log.info(f"📦 {display_name}: طول {fmt_seconds(duration)} → {total_chunks} قطعه")
+    keeps = compute_keep_segments(duration, skip_ranges)
+    if not keeps:
+        await event.reply(
+            "همهٔ فایل داخل بازه‌های حذفی قرار گرفت و بخشی برای تبدیل نماند.\n"
+            "فایل را دوباره ارسال کنید و بازه‌های حذفی را درست‌تر وارد کنید.",
+            parse_mode=None,
+        )
+        return
+    total_chunks = sum(max(1, math.ceil((b - a) / CHUNK_SECONDS)) for a, b in keeps)
+    skipped_sec = max(0.0, duration - sum(b - a for a, b in keeps))
+    lang_name = next((n for c, (cc, n) in LANGUAGES.items() if cc == lang_code), lang_code)
+    log.info(f"📦 {display_name}: طول {fmt_seconds(duration)} → {total_chunks} قطعه "
+             f"(زبان {lang_code}، حذفی {fmt_seconds(skipped_sec)})")
     await event.reply(
         f"صدا آماده شد؛ مدت آن {fmt_seconds(duration)} است.\n"
-        f"تبدیل در {total_chunks} قطعهٔ {CHUNK_SECONDS} ثانیه‌ای انجام می‌شود...",
+        f"زبان تشخیص گفتار: {lang_name}\n"
+        + (f"بخش‌های حذفی: {fmt_seconds(skipped_sec)} از صدا کنار گذاشته می‌شود.\n" if skipped_sec > 0.5 else "")
+        + f"تبدیل در {total_chunks} قطعهٔ {CHUNK_SECONDS} ثانیه‌ای انجام می‌شود...",
         parse_mode=None,
     )
 
@@ -429,42 +594,61 @@ async def process_file(event, src_path: str, display_name: str, token: str, want
         rate = w.getframerate()
         frames_per_chunk = rate * CHUNK_SECONDS
         idx = 0
-        while True:
-            # بررسی لغو توسط کاربر
+        for seg_a, seg_b in keeps:
             if token in cancelled_tokens:
                 cancelled = True
                 break
+            try:
+                w.setpos(int(seg_a * rate))   # پرش به شروع بازهٔ سالم
+            except Exception:
+                pass
+            seg_remaining = int((seg_b - seg_a) * rate)
+            seg_off = seg_a
+            while seg_remaining > 0:
+                if token in cancelled_tokens:
+                    cancelled = True
+                    break
+                n = min(frames_per_chunk, seg_remaining)
+                frames = w.readframes(n)   # خواندن ترتیبی از دیسک — رم ثابت می‌ماند
+                if not frames:
+                    break
 
-            frames = w.readframes(frames_per_chunk)   # خواندن ترتیبی از دیسک — رم ثابت می‌ماند
-            if not frames:
-                break
+                offset_sec = seg_off
+                result = await asyncio.to_thread(send_to_google_api, frames, lang_code)
 
-            offset_sec = idx * CHUNK_SECONDS
-            result = await asyncio.to_thread(send_to_google_api, frames, LANGUAGE)
+                if result["success"] and result["text"]:
+                    texts.append((offset_sec, result["text"]))
+                    ok += 1
+                elif result["success"]:
+                    empty += 1   # سکوت یا کیفیت پایین
+                else:
+                    err += 1
+                    log.warning(f"❌ قطعه {idx + 1}: {result['error']}")
 
-            if result["success"] and result["text"]:
-                texts.append((offset_sec, result["text"]))
-                ok += 1
-            elif result["success"]:
-                empty += 1   # سکوت یا کیفیت پایین
-            else:
-                err += 1
-                log.warning(f"❌ قطعه {idx + 1}: {result['error']}")
+                seg_off += len(frames) / (2.0 * rate)   # ۱۶بیت = ۲ بایت در نمونه
+                seg_remaining -= n
+                idx += 1
 
-            idx += 1
+                # ---------- پیشرفت زنده (هر ~۲۰ ثانیه) ----------
+                now = time.time()
+                if now - last_edit >= 20 or idx == total_chunks:
+                    last_edit = now
+                    pct = idx * 100.0 / max(1, total_chunks)
+                    elapsed = now - t0
+                    eta = (elapsed / idx) * (total_chunks - idx) if idx else 0
+                    await safe_edit(
+                        progress_msg,
+                        f"در حال تبدیل... {idx}/{total_chunks} ({pct:.0f}٪)\n"
+                        f"{fmt_seconds(offset_sec)} از {fmt_seconds(duration)} — تقریباً {fmt_seconds(eta)} باقی مانده",
+                    )
+        if token in cancelled_tokens:
+            cancelled = True
 
-            # ---------- پیشرفت زنده (هر ~۲۰ ثانیه) ----------
-            now = time.time()
-            if now - last_edit >= 20 or idx == total_chunks:
-                last_edit = now
-                pct = idx * 100.0 / total_chunks
-                elapsed = now - t0
-                eta = (elapsed / idx) * (total_chunks - idx) if idx else 0
-                await safe_edit(
-                    progress_msg,
-                    f"در حال تبدیل... {idx}/{total_chunks} ({pct:.0f}٪)\n"
-                    f"{fmt_seconds(offset_sec)} از {fmt_seconds(duration)} — تقریباً {fmt_seconds(eta)} باقی مانده",
-                )
+    # فایل WAV موقت دیگر لازم نیست
+    try:
+        shutil.rmtree(os.path.dirname(wav_path), ignore_errors=True)
+    except Exception:
+        pass
 
     # ---------- ۳) ساخت نتیجه ----------
     try:
@@ -482,6 +666,7 @@ async def process_file(event, src_path: str, display_name: str, token: str, want
     stats = (
         f"طول صدا {fmt_seconds(duration)} • زمان تبدیل {fmt_seconds(time.time() - t0)} • "
         f"{ok} قطعهٔ موفق" + (f" • {err} قطعه خطا داد" if err else "")
+        + (f" • {fmt_seconds(skipped_sec)} حذف‌شده" if skipped_sec > 0.5 else "")
     )
     log.info(f"🏁 پایان {display_name}: {stats}")
     _label = await user_label(event)
@@ -541,10 +726,14 @@ async def start_handler(event):
         "• ویس و پیام تصویری\n"
         "• فایل صوتی: mp3 ، m4a ، wav ، ogg ، flac\n"
         "• ویدیو: mp4 ، mkv ، avi — تا ۲ گیگابایت\n\n"
+        "پس از ارسال فایل، سه مرحلهٔ کوتاه را طی می‌کنیم:\n"
+        "۱) زبان گفتار فایل را انتخاب می‌کنید (فارسی، انگلیسی، عربی و…)\n"
+        "۲) در صورت نیاز، دقیقه‌های حذفی را مشخص می‌کنید تا از تبدیل کنار گذاشته شوند\n"
+        "۳) خلاصهٔ تنظیمات را تأیید می‌کنید و تبدیل آغاز می‌شود\n\n"
         "پس از هر تبدیل، زیر متن دکمهٔ «تبدیل به جزوه» نمایش داده می‌شود؛ با زدن آن، همان متن به "
-        "جزوه‌ای مرتب و تیتربندی‌شده همراه جدول و نمودار (PDF) تبدیل می‌شود.\n\n"
+        "جزوه‌ای مرتب و تیتربندی‌شده همراه جدول، نمودار و نقشهٔ ذهنی (PDF) تبدیل می‌شود.\n\n"
         "/status — وضعیت ربات\n"
-        "/cancel — لغو پردازش\n"
+        "/cancel — لغو تنظیم یا پردازش\n"
         "/jozve — ساخت خودکار جزوه پس از هر تبدیل (روشن/خاموش)"
     )
     is_new = event.sender_id not in known_users
@@ -566,18 +755,34 @@ async def status_handler(event):
         f"{st}\n"
         f"در صف: {waiting_count} نفر\n"
         f"مدت فعالیت: {fmt_seconds(time.time() - start_time)}\n"
-        f"قطعات {CHUNK_SECONDS} ثانیه‌ای • زبان {LANGUAGE} • سقف {MAX_FILE_MB} مگابایت"
+        f"قطعات {CHUNK_SECONDS} ثانیه‌ای • زبان: انتخابی هنگام ارسال فایل (پیش‌فرض فارسی) • سقف {MAX_FILE_MB} مگابایت"
     )
 
 
 @client.on(events.NewMessage(incoming=True, pattern=r"^/cancel$"))
 async def cancel_handler(event):
+    # تنظیم نیمه‌کاره (انتخاب زبان/حذفیات) هم لغو شود
+    cancelled_setups = 0
+    up = user_pending.pop(event.sender_id, None)
+    if up and up.get("token") in PENDING_SETUP:
+        PENDING_SETUP.pop(up["token"], None)
+        cancelled_setups += 1
+    for t in [t for t, s in PENDING_SETUP.items() if s.get("user_id") == event.sender_id]:
+        PENDING_SETUP.pop(t, None)
+        cancelled_setups += 1
+
     tokens = user_tokens.get(event.sender_id, [])
-    if not tokens:
+    if not tokens and not cancelled_setups:
         await event.reply("فایلی در صف یا در حال پردازش ندارید.")
         return
-    cancelled_tokens.update(tokens)
-    await event.reply(f"🚫 درخواست لغو ثبت شد ({len(tokens)} فایل). اگر فایل در صف باشد، پردازش نمی‌شود و اگر در حال پردازش باشد، چند ثانیه بعد متوقف می‌شود.")
+    if tokens:
+        cancelled_tokens.update(tokens)
+    parts = []
+    if cancelled_setups:
+        parts.append(f"{cancelled_setups} تنظیم نیمه‌کاره باطل شد")
+    if tokens:
+        parts.append(f"درخواست لغو برای {len(tokens)} فایل ثبت شد (اگر در صف باشد پردازش نمی‌شود و اگر در حال پردازش باشد چند ثانیه بعد متوقف می‌شود)")
+    await event.reply("🚫 " + "؛ ".join(parts) + ".")
 
 
 @client.on(events.NewMessage(incoming=True, pattern=r"^/jozve(\s+(on|off|روشن|خاموش))?\s*$"))
@@ -638,9 +843,7 @@ async def jz_button_handler(event):
 
 @client.on(events.NewMessage(incoming=True))
 async def media_handler(event):
-    """پذیرش هر نوع فایل صوتی / تصویری و ارسال به صف پردازش"""
-    global waiting_count
-
+    """پذیرش فایل صوتی/تصویری → آغاز تنظیم گام‌به‌گام (زبان ← حذفیات ← تأیید)"""
     msg = event.message
     if not msg.media or (msg.text or "").startswith("/"):
         return
@@ -662,16 +865,72 @@ async def media_handler(event):
 
     display_name = file.name or ("voice-message.ogg" if mime.startswith("audio") else "video.mp4")
     wants_jozve = "جزوه" in (msg.message or "")   # کپشن «جزوه» = جزوه‌سازی خودکارِ همین فایل
-    token = uuid.uuid4().hex
-    user_tokens.setdefault(event.sender_id, []).append(token)
+
+    # اگر تنظیم نیمه‌کارهٔ قبلی دارد، باطل شود (تنظیم جدید جایگزین می‌شود)
+    _prune_setups()
+    old = user_pending.pop(event.sender_id, None)
+    if old:
+        PENDING_SETUP.pop(old.get("token"), None)
+
+    token = uuid.uuid4().hex[:12]
     _label = await user_label(event)
+    PENDING_SETUP[token] = {
+        "chat_id": event.chat_id, "msg_id": msg.id, "user_id": event.sender_id,
+        "display_name": display_name, "size_mb": size_mb,
+        "wants_jozve": wants_jozve, "ts": time.time(), "label": _label,
+        "lang_code": "", "lang_name": "", "skip_ranges": None, "stage": "lang",
+    }
+    user_pending[event.sender_id] = {"token": token, "stage": "lang"}
     admin_log(f"📥 فایل: «{display_name[:50]}» ({size_mb:.0f}MB) | از: {_label}")
+
+    await event.reply(
+        "فایل شما ثبت شد؛ دو گام کوتاه تا شروع تبدیل مانده است.\n\n"
+        "گام ۱ — زبان گفتار فایل چیست؟\n"
+        "(بعد از انتخاب زبان، در صورت نیاز دقیقه‌های حذفی را مشخص می‌کنید و با تأیید نهایی، تبدیل آغاز می‌شود.)",
+        parse_mode=None,
+        buttons=lang_buttons(token),
+    )
+
+
+async def _run_pipeline(st: dict, token: str):
+    """پس از تأیید نهایی: دریافت فایل → صف → تبدیل (همان مسیر قبلی media_handler)"""
+    global waiting_count
+    chat_id = st["chat_id"]
+    display_name = st["display_name"]
+
+    try:
+        msg = await client.get_messages(chat_id, ids=st["msg_id"])
+    except Exception:
+        msg = None
+    if not msg or not getattr(msg, "media", None):
+        await client.send_message(
+            chat_id,
+            "پیام فایل پیدا نشد (احتمالاً حذف شده است)؛ لطفاً فایل را دوباره ارسال کنید.",
+            parse_mode=None,
+        )
+        return
+
+    file = msg.file
+    size_mb = ((file.size or 0) / (1024 * 1024)) if file else float(st.get("size_mb") or 0)
+    if file is None or size_mb > MAX_FILE_MB:
+        await client.send_message(
+            chat_id,
+            "این فایل دیگر قابل دریافت نیست یا حجمش بیش از سقف مجاز است؛ فایل را دوباره ارسال کنید.",
+            parse_mode=None,
+        )
+        return
+
+    _label = st.get("label") or f"id={st.get('user_id')}"
+    skip_txt = f"{len(st.get('skip_ranges') or [])} بازه" if st.get("skip_ranges") else "ندارد"
+    admin_log(f"▶️ تبدیل آغاز شد: «{display_name[:50]}» | زبان: {st.get('lang_name')} | "
+              f"حذفیات: {skip_txt} | {_label}")
 
     # ---------- صف ----------
     need_queue = queue_lock.locked()
     if need_queue:
         waiting_count += 1
-        await event.reply(
+        await client.send_message(
+            chat_id,
             f"فایل شما در صف قرار گرفت (نوبت {waiting_count}).\n"
             "به‌ترتیب پردازش می‌شود — لغو: /cancel",
             parse_mode=None,
@@ -679,7 +938,7 @@ async def media_handler(event):
 
     tmp_dir = tempfile.mkdtemp(prefix="stt_dl_")
     src_path = os.path.join(tmp_dir, f"src{file.ext or ''}")
-    status = await event.reply("در حال دریافت فایل... 0٪", parse_mode=None)
+    status = await client.send_message(chat_id, "در حال دریافت فایل... 0٪", parse_mode=None)
 
     try:
         # ---------- دانلود با پیشرفت زنده ----------
@@ -698,30 +957,197 @@ async def media_handler(event):
         log.info(f"📥 دانلود شد: {display_name} ({size_mb:.0f}MB)")
 
         # ---------- پردازش ترتیبی ----------
+        user_tokens.setdefault(st["user_id"], []).append(token)
         async with queue_lock:
             if need_queue:
                 waiting_count = max(0, waiting_count - 1)
             if token not in cancelled_tokens:
-                await process_file(event, src_path, display_name, token, wants_jozve)
+                await process_file(
+                    msg, src_path, display_name, token,
+                    wants_jozve=bool(st.get("wants_jozve")),
+                    lang_code=st.get("lang_code") or "fa-IR",
+                    skip_ranges=st.get("skip_ranges"),
+                    label=_label,
+                )
             else:
-                await event.reply("این فایل قبل از شروع پردازش لغو شد.", parse_mode=None)
+                await client.send_message(chat_id, "این فایل قبل از شروع پردازش لغو شد.", parse_mode=None)
 
     except Exception as e:
         log.exception(f"❌ خطای کلی در پردازش {display_name}: {e}")
-        await event.reply(f"خطای غیرمنتظره در پردازش فایل:\n{str(e)[:300]}", parse_mode=None)
+        await client.send_message(chat_id, f"خطای غیرمنتظره در پردازش فایل:\n{str(e)[:300]}", parse_mode=None)
         admin_log(f"⚠️ خطای پردازش «{display_name[:40]}»\n{str(e)[:200]}\nکاربر: {_label}")
     finally:
         # پاکسازی فایل‌های موقت و آزادسازی نوبت
+        cancelled_tokens.discard(token)
         try:
             await status.delete()
         except Exception:
             pass
         shutil.rmtree(tmp_dir, ignore_errors=True)
-        tokens_of_user = user_tokens.get(event.sender_id)
+        tokens_of_user = user_tokens.get(st["user_id"])
         if tokens_of_user and token in tokens_of_user:
             tokens_of_user.remove(token)
             if not tokens_of_user:
-                user_tokens.pop(event.sender_id, None)
+                user_tokens.pop(st["user_id"], None)
+
+
+# ---------- کال‌بک‌های تنظیم گام‌به‌گام ----------
+
+@client.on(events.CallbackQuery(pattern=r"^lang:"))
+async def lang_pick_handler(event):
+    """گام ۱: انتخاب زبان گفتار فایل"""
+    try:
+        _, token, code = (event.data or b"").decode("utf-8", "ignore").split(":", 2)
+    except ValueError:
+        await event.answer("دادهٔ دکمه نامعتبر است.", alert=True)
+        return
+    st = get_setup(token)
+    if not st:
+        await event.answer("این درخواست منقضی شده است؛ فایل را دوباره ارسال کنید.", alert=True)
+        return
+    if code not in LANGUAGES:
+        await event.answer("زبان نامعتبر است.", alert=True)
+        return
+    cc, name = LANGUAGES[code]
+    st["lang_code"], st["lang_name"], st["stage"] = cc, name, "skip_q"
+    user_pending[st["user_id"]] = {"token": token, "stage": "skip_q"}
+    await event.answer(f"زبان: {name}")
+    await event.edit(
+        f"زبان گفتار: {name}\n\n"
+        "گام ۲ — آیا می‌خواهید بخشی از فایل از تبدیل حذف شود؟\n"
+        "با «حذف قطعات» می‌توانید دقیقه‌های مشخصی (مثلاً تیتراژ، آگهی یا مقدمه) را کنار بگذارید.",
+        parse_mode=None,
+        buttons=skip_q_buttons(token),
+    )
+
+
+@client.on(events.CallbackQuery(pattern=r"^skipq:"))
+async def skip_input_start_handler(event):
+    """گام ۲ (الف): کاربر می‌خواهد قطعاتی را حذف کند — منتظر دقیقه‌ها می‌مانیم"""
+    token = (event.data or b"").decode("utf-8", "ignore").split(":", 1)[-1]
+    st = get_setup(token)
+    if not st:
+        await event.answer("این درخواست منقضی شده است؛ فایل را دوباره ارسال کنید.", alert=True)
+        return
+    st["stage"] = "skip_input"
+    user_pending[st["user_id"]] = {"token": token, "stage": "skip_input"}
+    await event.answer("دقیقه‌ها را بنویسید.")
+    await event.edit(
+        "دقیقهٔ بخش‌هایی که باید حذف شود را بنویسید و بفرستید.\n\n"
+        "قالب‌های قابل قبول:\n"
+        "• 3-7\n"
+        "• ۳ تا ۷\n"
+        "• 2:30 تا 4:10\n"
+        "• 3-7، 12-15  (چند بازه با ویرگول یا «و»)\n\n"
+        "پس از ثبت، خلاصهٔ تنظیمات را برای تأیید نهایی نشان می‌دهم.",
+        parse_mode=None,
+        buttons=skip_input_buttons(token),
+    )
+
+
+@client.on(events.CallbackQuery(pattern=r"^backq:"))
+async def skip_back_handler(event):
+    """بازگشت از ورودی دقیقه‌ها به پرسش حذف قطعات"""
+    token = (event.data or b"").decode("utf-8", "ignore").split(":", 1)[-1]
+    st = get_setup(token)
+    if not st:
+        await event.answer("این درخواست منقضی شده است؛ فایل را دوباره ارسال کنید.", alert=True)
+        return
+    st["stage"] = "skip_q"
+    user_pending[st["user_id"]] = {"token": token, "stage": "skip_q"}
+    await event.answer()
+    await event.edit(
+        f"زبان گفتار: {st.get('lang_name', '—')}\n\n"
+        "گام ۲ — آیا می‌خواهید بخشی از فایل از تبدیل حذف شود؟",
+        parse_mode=None,
+        buttons=skip_q_buttons(token),
+    )
+
+
+@client.on(events.CallbackQuery(pattern=r"^noskip:"))
+async def noskip_handler(event):
+    """گام ۲ (ب): بدون حذف — نمایش خلاصهٔ تأیید"""
+    token = (event.data or b"").decode("utf-8", "ignore").split(":", 1)[-1]
+    st = get_setup(token)
+    if not st:
+        await event.answer("این درخواست منقضی شده است؛ فایل را دوباره ارسال کنید.", alert=True)
+        return
+    st["skip_ranges"] = None
+    user_pending.pop(st["user_id"], None)
+    await event.answer()
+    await event.edit(confirm_text(st), parse_mode=None, buttons=confirm_buttons(token))
+
+
+@client.on(events.CallbackQuery(pattern=r"^go:"))
+async def go_handler(event):
+    """تأیید نهایی — آغاز دریافت و تبدیل"""
+    token = (event.data or b"").decode("utf-8", "ignore").split(":", 1)[-1]
+    st = get_setup(token)
+    if not st:
+        await event.answer("این درخواست منقضی شده است؛ فایل را دوباره ارسال کنید.", alert=True)
+        return
+    if not st.get("lang_code"):
+        await event.answer("اول زبان گفتار را انتخاب کنید.", alert=True)
+        return
+    PENDING_SETUP.pop(token, None)
+    up = user_pending.get(st["user_id"])
+    if up and up.get("token") == token:
+        user_pending.pop(st["user_id"], None)
+    await event.answer("در حال آماده‌سازی...")
+    await event.edit("تنظیمات تأیید شد ✅ — پیگیری پردازش در پیام‌های بعدی...",
+                     parse_mode=None, buttons=Button.clear())
+    await _run_pipeline(st, token)
+
+
+@client.on(events.CallbackQuery(pattern=r"^cx:"))
+async def cancel_setup_handler(event):
+    """انصراف از تنظیم این فایل"""
+    token = (event.data or b"").decode("utf-8", "ignore").split(":", 1)[-1]
+    st = get_setup(token)
+    if st:
+        PENDING_SETUP.pop(token, None)
+        up = user_pending.get(st.get("user_id"))
+        if up and up.get("token") == token:
+            user_pending.pop(st["user_id"], None)
+    await event.answer("لغو شد.")
+    await event.edit(
+        "این درخواست لغو شد؛ فایل را دوباره ارسال کنید تا از ابتدا تنظیم شود.",
+        parse_mode=None, buttons=Button.clear(),
+    )
+
+
+@client.on(events.NewMessage(incoming=True))
+async def skip_text_handler(event):
+    """دریافت متنی دقیقه‌های حذفی (تنها در چت خصوصی و فقط وقتی کاربر در مرحلهٔ ورودِ دقیقه‌هاست)"""
+    if not event.is_private:
+        return
+    raw = (event.message.message or "").strip()
+    if not raw or raw.startswith("/"):
+        return
+    if event.message.media:
+        return
+    up = user_pending.get(event.sender_id)
+    if not up or up.get("stage") != "skip_input":
+        return
+    token = up["token"]
+    st = get_setup(token)
+    if not st:
+        user_pending.pop(event.sender_id, None)
+        return
+
+    ranges, err = parse_skip_ranges(raw)
+    if not ranges:
+        await event.reply(
+            f"{err}\n\nیک بار دیگر با این قالب بفرستید:\n"
+            "• 3-7\n• ۲:۳۰ تا ۴:۱۰\n• 3-7، 12-15",
+            parse_mode=None,
+        )
+        return
+
+    st["skip_ranges"] = merge_ranges(ranges)
+    st["stage"] = "confirm"
+    user_pending.pop(event.sender_id, None)
+    await event.reply(confirm_text(st), parse_mode=None, buttons=confirm_buttons(token))
 
 
 # =========================================================
