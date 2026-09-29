@@ -62,6 +62,8 @@ SESSION_NAME = os.getenv("SESSION_NAME", "stt_bot_session")
 # کلیدها را jozve.py از محیط می‌خواند:
 #   OPENROUTER_API_KEY ← کلید اصلی (رایگان از openrouter.ai/keys — هر کلید: ۵۰ درخواست در روز)
 #   OPENROUTER_API_KEY_BACKUP ← کلید پشتیبان؛ با تمام‌شدن سهمیهٔ اصلی، خودکار به آن سوییچ می‌شود
+#   DEEPSEEK_API_KEY ← اختیاری؛ API رسمی DeepSeek (پولی اما بسیار ارزان، بدون سهمیهٔ روزانه) —
+#     در صورت تنظیم اولویت دارد و در خطا خودکار به مدل‌های رایگان OpenRouter برمی‌گردد
 JOZVE_AUTO = os.getenv("JOZVE_AUTO", "0") == "1"   # بعد از هر تبدیل «خودکار» جزوه ساخته شود؟ (پیش‌فرض: فقط با دکمه)
 JOZVE_ON = {}                                       # chat_id → True/False (با دستور /jozve)
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7433357700"))  # گزارش ورود/استفادهٔ کاربران به این آیدی تلگرام
@@ -212,19 +214,25 @@ async def user_label(event) -> str:
         return f"id={getattr(event, 'sender_id', '?')}"
 
 
-def register_jz_pending(text: str, title: str, chat_id: int, user_id: int) -> str:
+def register_jz_pending(text: str, title: str, chat_id: int, user_id: int,
+                        custom_prompt: str = "") -> str:
     """متن آمادهٔ جزوه را در حافظه نگه می‌دارد و توکن دکمه را برمی‌گرداند (عمر: ۴۸ ساعت)"""
     now = time.time()
     for t in [t for t, v in PENDING_JZ.items() if now - v["ts"] > 48 * 3600]:
         PENDING_JZ.pop(t, None)
+    for uid, up in list(user_pending.items()):   # انتظار پرامپتِ توکن‌های منقضی پاک شود
+        if up.get("stage") == "jz_prompt" and up.get("token") not in PENDING_JZ:
+            user_pending.pop(uid, None)
     token = uuid.uuid4().hex[:12]
     PENDING_JZ[token] = {"text": text, "title": title, "chat_id": chat_id,
-                         "user_id": user_id, "ts": now, "busy": False}
+                         "user_id": user_id, "ts": now, "busy": False,
+                         "custom_prompt": (custom_prompt or "").strip()}
     return token
 
 
 def jz_buttons(token: str):
-    return [Button.inline("📚 تبدیل به جزوه", f"jz:{token}".encode())]
+    return [[Button.inline("📚 تبدیل به جزوه", f"jz:{token}".encode())],
+            [Button.inline("✍️ جزوه با پرامپت دلخواه", f"jzp:{token}".encode())]]
 
 
 # =========================================================
@@ -367,12 +375,14 @@ def confirm_text(st: dict) -> str:
 # =========================================================
 #  ساخت و ارسال جزوه (هم برای دکمه، هم حالت خودکار/کپشن)
 # =========================================================
-async def run_jozve(chat_id: int, text: str, display_name: str, user_id: int = 0):
-    """جزوه را از متن آماده می‌سازد و فایل‌ها را می‌فرستد — خارج از قفل صف اجرا می‌شود."""
+async def run_jozve(chat_id: int, text: str, display_name: str, user_id: int = 0,
+                    custom_prompt: str = ""):
+    """جزوه را از متن آماده می‌سازد و فایل‌ها را می‌فرستد — خارج از قفل صف اجرا می‌شود.
+    custom_prompt: دستور ویژهٔ کاربر (از دکمهٔ «جزوه با پرامپت دلخواه»)"""
     if not jozve_available():
         await client.send_message(
             chat_id,
-            "فعلاً امکان ساخت جزوه فراهم نیست؛ کلید OPENROUTER_API_KEY روی سرور تنظیم نشده است.",
+            "فعلاً امکان ساخت جزوه فراهم نیست؛ کلید OPENROUTER_API_KEY (یا DEEPSEEK_API_KEY) روی سرور تنظیم نشده است.",
             parse_mode=None,
         )
         return
@@ -395,7 +405,8 @@ async def run_jozve(chat_id: int, text: str, display_name: str, user_id: int = 0
     out_dir = tempfile.mkdtemp(prefix="jozve_")
     t0 = time.time()
     try:
-        res = await asyncio.to_thread(jozve.produce_jozve, text, display_name, out_dir, _prog)
+        res = await asyncio.to_thread(jozve.produce_jozve, text, display_name, out_dir, _prog,
+                                      custom_prompt)
 
         if not res.get("ok"):
             if res.get("quota"):
@@ -405,7 +416,7 @@ async def run_jozve(chat_id: int, text: str, display_name: str, user_id: int = 0
                     "(سهمیهٔ رایگان OpenRouter روی همهٔ مدل‌های رایگان مشترک است).\n"
                     "نیمه‌شب به‌وقت جهانی (UTC) دوباره برقرار می‌شود؛ متن محفوظ است — فردا دوباره دکمه را بفشارید.",
                     parse_mode=None,
-                    buttons=jz_buttons(register_jz_pending(text, display_name, chat_id, user_id)),
+                    buttons=jz_buttons(register_jz_pending(text, display_name, chat_id, user_id, custom_prompt)),
                 )
                 admin_log(f"⚠️ جزوه ناموفق (سهمیهٔ روزانه) — «{display_name[:40]}» | user={user_id}")
             else:
@@ -414,7 +425,7 @@ async def run_jozve(chat_id: int, text: str, display_name: str, user_id: int = 0
                     f"ساخت جزوه در این نوبت انجام نشد:\n{str(res.get('error'))[:200]}\n\n"
                     "متن محفوظ است — دکمه را دوباره بفشارید؛ اگر باز ساخته نشد، فایل را دوباره ارسال کنید.",
                     parse_mode=None,
-                    buttons=jz_buttons(register_jz_pending(text, display_name, chat_id, user_id)),
+                    buttons=jz_buttons(register_jz_pending(text, display_name, chat_id, user_id, custom_prompt)),
                 )
                 admin_log(f"⚠️ جزوه ناموفق — «{display_name[:40]}» | user={user_id}\n{str(res.get('error'))[:200]}")
             return
@@ -430,7 +441,7 @@ async def run_jozve(chat_id: int, text: str, display_name: str, user_id: int = 0
                                caption=cap + " — در هر مرورگری قابل بازکردن است")
         await safe_edit(status, "جزوه آماده و ارسال شد ✅")
         admin_log(
-            f"📚 جزوه ارسال شد: «{str(res.get('title'))[:60]}»\n"
+            f"📚 جزوه ارسال شد{' (پرامپت دلخواه)' if (custom_prompt or '').strip() else ''}: «{str(res.get('title'))[:60]}»\n"
             f"{res.get('sections', '?')} فصل | {res.get('words_in', 0)} به {res.get('words_out', 0)} کلمه | "
             f"موتور: {res.get('provider', '?')} | زمان: {fmt_seconds(time.time() - t0)}\n"
             f"user={user_id}"
@@ -730,8 +741,9 @@ async def start_handler(event):
         "۱) زبان گفتار فایل را انتخاب می‌کنید (فارسی، انگلیسی، عربی و…)\n"
         "۲) در صورت نیاز، دقیقه‌های حذفی را مشخص می‌کنید تا از تبدیل کنار گذاشته شوند\n"
         "۳) خلاصهٔ تنظیمات را تأیید می‌کنید و تبدیل آغاز می‌شود\n\n"
-        "پس از هر تبدیل، زیر متن دکمهٔ «تبدیل به جزوه» نمایش داده می‌شود؛ با زدن آن، همان متن به "
-        "جزوه‌ای مرتب و تیتربندی‌شده همراه جدول، نمودار و نقشهٔ ذهنی (PDF) تبدیل می‌شود.\n\n"
+        "پس از هر تبدیل، زیر متن دو دکمه نمایش داده می‌شود:\n"
+        "• «تبدیل به جزوه» — همان متن به جزوه‌ای مرتب و تیتربندی‌شده همراه جدول، نمودار و نقشهٔ ذهنی (PDF) تبدیل می‌شود.\n"
+        "• «جزوه با پرامپت دلخواه» — دستور خودتان را می‌نویسید (مثلاً «فقط نکته‌های امتحانی را استخراج کن») و جزوه طبق همان دستور ساخته می‌شود.\n\n"
         "/status — وضعیت ربات\n"
         "/cancel — لغو تنظیم یا پردازش\n"
         "/jozve — ساخت خودکار جزوه پس از هر تبدیل (روشن/خاموش)"
@@ -837,6 +849,86 @@ async def jz_button_handler(event):
     admin_log(f"📚 درخواست جزوه (دکمه) — «{data['title'][:40]}» | {_label}")
     try:
         await run_jozve(data["chat_id"], data["text"], data["title"], data["user_id"])
+    finally:
+        data["busy"] = False
+
+
+@client.on(events.CallbackQuery(pattern=r"^jzp:"))
+async def jz_prompt_start_handler(event):
+    """دکمهٔ «جزوه با پرامپت دلخواه» — انتظار برای دستور کاربر"""
+    token = (event.data or b"").decode("utf-8", "ignore").split(":", 1)[-1]
+    data = PENDING_JZ.get(token)
+    if not data:
+        await event.answer(
+            "این متن دیگر در حافظه موجود نیست؛ فایل را دوباره ارسال و دکمه را بفشارید.",
+            alert=True,
+        )
+        return
+    if data.get("busy"):
+        await event.answer("جزوه در حال ساخت است؛ لطفاً شکیبا باشید.", alert=True)
+        return
+    user_pending[event.sender_id] = {"token": token, "stage": "jz_prompt"}
+    await event.answer()
+    await event.edit(
+        "دستور دلخواه خود را در یک پیام بنویسید و بفرستید.\n\n"
+        "چند نمونه:\n"
+        "• «فقط نکته‌های امتحانی و فرمول‌ها را استخراج کن»\n"
+        "• «جزوه را به‌صورت پرسش و پاسخ بچین»\n"
+        "• «خلاصه‌ای برای مرور شب امتحان بساز»\n\n"
+        "دستور شما به قوانین اصلی جزوه (فارسی، پوشش کامل، جدول و نمودار) افزوده می‌شود؛ "
+        "پس از ثبت، خلاصهٔ آن را برای تأیید نشان می‌دهم.",
+        parse_mode=None,
+        buttons=[[Button.inline("✖️ انصراف", f"jzx:{token}".encode())]],
+    )
+
+
+@client.on(events.CallbackQuery(pattern=r"^jzx:"))
+async def jz_prompt_cancel_handler(event):
+    """انصراف از ساخت جزوهٔ دلخواه"""
+    token = (event.data or b"").decode("utf-8", "ignore").split(":", 1)[-1]
+    up = user_pending.get(event.sender_id)
+    if up and up.get("token") == token:
+        user_pending.pop(event.sender_id, None)
+    data = PENDING_JZ.get(token)
+    if data:
+        data.pop("custom_prompt", None)
+    await event.answer("لغو شد.")
+    await event.edit(
+        "درخواست جزوهٔ دلخواه لغو شد؛ دکمه‌های زیر متن ترنسکریپت همچنان فعال‌اند.",
+        parse_mode=None, buttons=Button.clear(),
+    )
+
+
+@client.on(events.CallbackQuery(pattern=r"^jzg:"))
+async def jz_prompt_go_handler(event):
+    """تأیید پرامپت دلخواه — آغاز ساخت جزوه با دستور کاربر"""
+    token = (event.data or b"").decode("utf-8", "ignore").split(":", 1)[-1]
+    data = PENDING_JZ.get(token)
+    if not data:
+        await event.answer(
+            "این متن دیگر در حافظه موجود نیست؛ فایل را دوباره ارسال کنید.", alert=True)
+        return
+    if data.get("busy"):
+        await event.answer("جزوه در حال ساخت است؛ لطفاً شکیبا باشید.", alert=True)
+        return
+    prompt = (data.get("custom_prompt") or "").strip()
+    if not prompt:
+        await event.answer("اول دستور دلخواه را بفرستید.", alert=True)
+        return
+    up = user_pending.get(event.sender_id)
+    if up and up.get("token") == token:
+        user_pending.pop(event.sender_id, None)
+    data["busy"] = True
+    try:
+        await event.answer("در حال ساخت جزوه با دستور شما؛ چند دقیقه زمان می‌برد.")
+    except Exception:
+        pass
+    _label = await user_label(event)
+    admin_log(f"📚 درخواست جزوه (پرامپت دلخواه) — «{data['title'][:40]}» | {_label}\n"
+              f"پرامپت: {prompt[:150]}")
+    try:
+        await run_jozve(data["chat_id"], data["text"], data["title"],
+                        data["user_id"], custom_prompt=prompt)
     finally:
         data["busy"] = False
 
@@ -1148,6 +1240,40 @@ async def skip_text_handler(event):
     st["stage"] = "confirm"
     user_pending.pop(event.sender_id, None)
     await event.reply(confirm_text(st), parse_mode=None, buttons=confirm_buttons(token))
+
+
+@client.on(events.NewMessage(incoming=True))
+async def jz_prompt_text_handler(event):
+    """دریافت پرامپت دلخواه جزوه (چت خصوصی، فقط وقتی کاربر در انتظار پرامپت است)"""
+    if not event.is_private:
+        return
+    raw = (event.message.message or "").strip()
+    if not raw or raw.startswith("/") or event.message.media:
+        return
+    up = user_pending.get(event.sender_id)
+    if not up or up.get("stage") != "jz_prompt":
+        return
+    token = up["token"]
+    data = PENDING_JZ.get(token)
+    if not data:
+        user_pending.pop(event.sender_id, None)
+        return
+    if len(raw) > 500:
+        await event.reply(
+            "دستور شما طولانی است (حداکثر ۵۰۰ حرف)؛ لطفاً کوتاه‌تر بفرستید.",
+            parse_mode=None,
+        )
+        return
+    data["custom_prompt"] = raw
+    user_pending.pop(event.sender_id, None)
+    shown = raw if len(raw) <= 300 else raw[:300] + "…"
+    await event.reply(
+        f"دستور شما ثبت شد:\n\n«{shown}»\n\n"
+        "با زدن «تأیید و ساخت جزوه»، جزوه بر اساس همین دستور ساخته و ارسال می‌شود.",
+        parse_mode=None,
+        buttons=[[Button.inline("✅ تأیید و ساخت جزوه", f"jzg:{token}".encode()),
+                  Button.inline("✖️ انصراف", f"jzx:{token}".encode())]],
+    )
 
 
 # =========================================================
