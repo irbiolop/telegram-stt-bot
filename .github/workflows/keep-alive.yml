@@ -2,17 +2,30 @@ name: Keep Alive
 
 # پینگ ضدخواب سرویس Render — هر ۵ دقیقه با دو زمان‌بندی آفست‌دار
 # (اگر GitHub یکی را با تأخیر اجرا کند، دیگری می‌رسد؛ آستانه خواب رندر ۱۵ دقیقه است)
+# + کامیت خالی هفتگی (heartbeat) تا ریپو «فعال» بماند و GitHub بعد از ۶۰ روز
+#   بی‌فعالیتی، workflow زمان‌بندی‌شده را خودکار غیرفعال نکند
 
 on:
   schedule:
     - cron: "*/5 * * * *"
     - cron: "2-59/5 * * * *"
+    - cron: "0 3 * * 1"       # heartbeat هفتگی (دوشنبه‌ها ۰۳:۰۰ UTC)
   workflow_dispatch:
+    inputs:
+      job:
+        description: "Which job to run (ping / heartbeat)"
+        required: false
+        default: "ping"
+        type: choice
+        options:
+          - ping
+          - heartbeat
 
 permissions: {}
 
 jobs:
   ping:
+    if: inputs.job != 'heartbeat'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -23,3 +36,21 @@ jobs:
           if [ "$code" != "200" ]; then
             echo "::warning::health endpoint returned HTTP $code"
           fi
+
+  heartbeat:
+    if: github.event.schedule == '0 3 * * 1' || (github.event_name == 'workflow_dispatch' && inputs.job == 'heartbeat')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Weekly empty commit to keep repository active
+        run: |
+          git clone -q "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "chore: weekly keep-alive heartbeat $(date -u +'%Y-%m-%d')"
+          git push -q origin HEAD
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
