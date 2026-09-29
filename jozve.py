@@ -28,6 +28,9 @@
   OPENROUTER_API_KEY         ← کلید اصلی (رایگان از openrouter.ai/keys)
   OPENROUTER_API_KEY_BACKUP  ← کلید پشتیبان؛ با تمام‌شدن سهمیهٔ اصلی خودکار به کار می‌رود
   OPENROUTER_API_KEYS        ← شکل دیگر: چند کلید جدا با کاما (اولی اصلی)
+  DEEPSEEK_API_KEY           ← اختیاری؛ API رسمی DeepSeek (پولی اما بسیار ارزان) —
+                               در صورت تنظیم اولویت دارد و سقف سهمیهٔ روزانه ندارد؛
+                               در خطا خودکار به مدل‌های رایگان OpenRouter برمی‌گردد
   JOZVE_MODELS               ← اختیاری؛ لیست مدل‌های جدا با کاما
 """
 
@@ -94,6 +97,12 @@ DEFAULT_MODELS = [
 ]
 MODELS = [m.strip() for m in os.getenv("JOZVE_MODELS", "").split(",") if m.strip()] or DEFAULT_MODELS
 
+# --- DeepSeek رسمی (اختیاری) — پولی اما بسیار ارزان؛ سقف سهمیهٔ روزانه ندارد ---
+DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
+DEEPSEEK_KEYS = [k.strip() for k in os.getenv(
+    "DEEPSEEK_API_KEYS", os.getenv("DEEPSEEK_API_KEY", "")).split(",") if k.strip()]
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+
 SECTION_WORDS = int(os.getenv("JOZVE_SECTION_WORDS", "2000"))  # طول تقریبی هر بازه (کلمه) — بزرگ‌تر = درخواست کمتر
 DEBUG_DIR = os.getenv("JOZVE_DEBUG_DIR", "")                  # اگر ست شود، پاسخ خام مدل ذخیره می‌شود
 
@@ -116,8 +125,8 @@ _FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 
 
 def has_provider() -> bool:
-    """آیا دست‌کم یک کلید OpenRouter تنظیم شده است؟"""
-    return bool(KEYS)
+    """آیا دست‌کم یک کلید (OpenRouter یا DeepSeek) تنظیم شده است؟"""
+    return bool(KEYS or DEEPSEEK_KEYS)
 
 
 class QuotaExhausted(Exception):
@@ -236,10 +245,60 @@ def _post_once(model, messages, max_tokens, temperature, timeout) -> dict:
             "error": "سهمیهٔ روزانهٔ همهٔ کلیدها به پایان رسیده است"}
 
 
+def _post_deepseek(messages, max_tokens, temperature, timeout) -> dict:
+    """درخواست مستقیم به API رسمی DeepSeek (سازگار با OpenAI) — بدون سقف سهمیهٔ روزانه.
+    هر کلید یک‌بار امتحان می‌شود؛ در خطا، فراخواننده به مدل‌های رایگان OpenRouter برمی‌گردد."""
+    for key in DEEPSEEK_KEYS:
+        try:
+            t0 = time.time()
+            log.info(f"🤖 درخواست به DeepSeek ({DEEPSEEK_MODEL}) ...")
+            r = requests.post(
+                DEEPSEEK_URL,
+                headers={"Authorization": f"Bearer {key}",
+                         "Content-Type": "application/json"},
+                timeout=timeout,
+                json={"model": DEEPSEEK_MODEL, "messages": messages,
+                      "max_tokens": max_tokens, "temperature": temperature,
+                      "frequency_penalty": 0.3, "presence_penalty": 0.2},
+            )
+            if r.status_code == 200:
+                ch = (r.json().get("choices") or [{}])[0]
+                msg = ch.get("message") or {}
+                content = msg.get("content")
+                if isinstance(content, list):
+                    content = "".join(seg.get("text", "") for seg in content
+                                      if isinstance(seg, dict))
+                if content and content.strip():
+                    log.info(f"✅ DeepSeek پاسخ داد در {time.time()-t0:.0f}s "
+                             f"(finish={ch.get('finish_reason')})")
+                    _note_usage(1)
+                    return {"ok": True, "text": content.strip(),
+                            "model": f"deepseek/{DEEPSEEK_MODEL}",
+                            "finish": ch.get("finish_reason") or ""}
+                return {"ok": False, "error": "پاسخ خالی از DeepSeek"}
+            try:
+                em = ((r.json().get("error") or {}).get("message") or "")[:110]
+            except Exception:
+                em = r.text[:110]
+            log.warning(f"⚠️ DeepSeek HTTP {r.status_code}: {em} — فال‌بک OpenRouter")
+        except requests.exceptions.Timeout:
+            log.warning("⚠️ DeepSeek timeout — فال‌بک OpenRouter")
+        except Exception as e:
+            log.warning(f"⚠️ DeepSeek خطا: {str(e)[:110]} — فال‌بک OpenRouter")
+    return {"ok": False, "error": "DeepSeek پاسخ نداد"}
+
+
 def _chat(messages, max_tokens=6000, temperature=0.2, timeout=150) -> dict:
-    """یک درخواست چت به OpenRouter؛ در خطا/۴۲۹ بین کلیدها و مدل‌های رایگان جابه‌جا می‌شود."""
+    """یک درخواست چت: اول DeepSeek رسمی (اگر کلید داشته باشد)، سپس مدل‌های رایگان OpenRouter؛
+    در خطا/۴۲۹ بین کلیدها و مدل‌های رایگان جابه‌جا می‌شود."""
+    if not KEYS and not DEEPSEEK_KEYS:
+        return {"ok": False, "error": "هیچ کلید هوش مصنوعی تنظیم نشده است"}
+    if DEEPSEEK_KEYS:
+        r = _post_deepseek(messages, max_tokens, temperature, timeout)
+        if r.get("ok"):
+            return r
     if not KEYS:
-        return {"ok": False, "error": "کلید OpenRouter تنظیم نشده است"}
+        return {"ok": False, "error": "کلید OpenRouter تنظیم نشده و DeepSeek هم پاسخ نداد"}
     errors = []
     for _round in range(2):  # دو دور کامل روی لیست مدل‌ها
         for model in MODELS:
@@ -319,14 +378,20 @@ SYSTEM_EDITOR = (
     "شکل صحیح و استانداردشان را بنویس. اگر شکل درست قطعی نیست، نزدیک‌ترین املای رایج و درست "
     "را بنویس؛ هرگز همان کلمهٔ خراب را عیناً در جزوه تکرار نکن.\n\n"
     "قانون ۵ — آیتم‌های تصویری (الزامی، نه اختیاری): هر فصل باید دست‌کم یک جدول یا یک کادر ::: "
-    "داشته باشد؛ هرجا مقایسه یا عدد قابل مقایسه بود ```chart بزن و هرجا مبحث درختی/چندشاخه بود "
-    "```mermaid (mindmap یا flowchart) بزن. کادر ::: برای تأکیدها، > برای جمله‌های کلیدی "
-    "گوینده، ==هایلایت== برای تعریف‌ها. فهرست‌ها با - یا 1. مرتب و شماره‌دار شوند.\n\n"
+    "داشته باشد. جدولِ مقایسه‌ای: هرگاه دو یا چند مفهوم/گزینه/روش/دوره با هم مقایسه یا طبقه‌بندی "
+    "می‌شوند حتماً جدول GFM بساز. کادر :::example برای هر مثال مهم، کادر :::important یا "
+    ":::warning برای هشدارها و نکته‌های سرنوشت‌ساز. هرجا عدد قابل مقایسه بود ```chart بزن و هرجا "
+    "مبحث درختی/چندشاخه بود ```mermaid (mindmap یا flowchart). > برای جمله‌های کلیدی گوینده و "
+    "==هایلایت== برای تعریف‌ها و فرمول‌های طلایی. فهرست‌ها با - یا 1. مرتب و شماره‌دار شوند.\n\n"
     "قانون ۶ — فقط مارکاپ: خروجی تو فقط خطوط مارکاپ است؛ بدون مقدمه و توضیح اضافه، بدون "
     "بلوک ``` که کل خروجی را بپوشاند، بدون ایموجی.\n\n"
     "قانون ۷ — زبان (بدون استثنا): «همهٔ» خروجی باید فارسی روان باشد — تیترها، جدول‌ها، برچسب "
     "نمودارها، نقشه‌های ذهنی و همهٔ متن؛ حتی یک جملهٔ انگلیسی خروجی را مردود می‌کند (فقط اصطلاحات "
-    "تخصصی که خودِ متن لاتین آورده مجاز است). زبان ترنسکریپت فارسی است و خروجی هم باید دقیقاً فارسی باشد.\n\n" + MARKUP_SPEC
+    "تخصصی که خودِ متن لاتین آورده مجاز است). زبان ترنسکریپت فارسی است و خروجی هم باید دقیقاً فارسی باشد.\n\n"
+    "قانون ۸ — اسکلت ثابت هر فصل (به همین ترتیب): (الف) شروع با «## تیتر کوتاه و گویا»؛ "
+    "(ب) بلافاصله یک پاراگراف معرفیِ ۲ تا ۳ جمله‌ای که بگوید این فصل چه بخشی از مطلب را پوشش می‌دهد؛ "
+    "(ج) بدنهٔ فصل با چند «### زیرتیتر» به همان ترتیب خودِ متن؛ (د) پایان هر فصل با یک کادر "
+    ":::summary با عنوان «جمع‌بندی» که نکته‌های کلیدی همان فصل را در چند بند فهرست می‌کند.\n\n" + MARKUP_SPEC
 )
 
 PLANNER_SYSTEM = ""  # (منسوخ — فصل‌بندی محلی شد تا ۱ درخواست در هر جزوه صرفه‌جویی شود)
@@ -516,7 +581,8 @@ def _clean_fragment(t: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _write_section(words, i, k, sec: dict, a: int, b: int, used: set) -> str:
+def _write_section(words, i, k, sec: dict, a: int, b: int, used: set,
+                   custom_prompt: str = "") -> str:
     range_text = " ".join(words[a:b])
     prev_note = (" ".join(words[max(0, a - 12):a]) or "—") if a > 0 else "آغاز متن"
     next_note = (" ".join(words[b:b + 12]) or "—") if b < len(words) else "پایان متن"
@@ -524,9 +590,17 @@ def _write_section(words, i, k, sec: dict, a: int, b: int, used: set) -> str:
     title_line = (f"عنوان این فصل از قبل مشخص است: «{sec_title}» — دقیقاً همین را به کار ببر."
                   if sec_title else
                   "اول یک تیتر ## فارسیِ کوتاه و گویا از روی محتوای همین بازه انتخاب کن و با همان شروع کن.")
+    cp = (custom_prompt or "").strip()
+    cp_block = (
+        "دستورالعمل ویژهٔ کاربر (الزامیِ اجرا — دقیقاً طبق همین بساز):\n"
+        f"«{cp}»\n"
+        "این دستور در کنار قوانین پایه جزوه اعمال می‌شود؛ در تعارض، قوانین پایه "
+        "(فارسی، پوشش کامل، منع اختراع، مارکاپ) مقدم‌اند.\n\n"
+    ) if cp else ""
     user_msg = (
         f"شما فصل {fa_num(i)} از {fa_num(k)} جزوه را می‌نویسید (مجموعه‌ای پیوسته که با هم کل جزوه را می‌سازند).\n"
         f"{title_line}\n\n"
+        f"{cp_block}"
         f"متن کامل بازهٔ تو (ویراستاری فقط روی همین):\n"
         f"⟦بازه⟧\n{range_text}\n⟦پایان بازه⟧\n\n"
         f"زمینهٔ صرفاً اطلاعاتی — این‌ها را بازنویسی نکن:\n"
@@ -545,8 +619,9 @@ def _write_section(words, i, k, sec: dict, a: int, b: int, used: set) -> str:
         f"✅ چک‌لیست پایانی — اگر هر یک رعایت نشود فصل مردود است:\n"
         f"۱) همهٔ متن و تیترها فارسی  ۲) شروع با «## تیتر» و چند «### زیرتیتر»  "
         f"۳) دست‌کم یک جدول یا کادر :::  ۴) به‌تناسب محتوا ```chart یا ```mermaid  "
-        f"۵) فهرست‌ها با - یا 1.  ۶) غلط‌های تایپی اصطلاحات و نام‌ها اصلاح شده باشند.\n\n"
-        f"⛔ قالب تحویل: خروجی نهایی را دقیقاً بین دو خط «===شروع===» و «===پایان===» بگذار. "
+        f"۵) فهرست‌ها با - یا 1.  ۶) غلط‌های تایپی اصطلاحات و نام‌ها اصلاح شده باشند."
+        + ("  ۷) دستورالعمل ویژهٔ کاربر اجرا شده باشد.\n\n" if cp else "\n\n")
+        + f"⛔ قالب تحویل: خروجی نهایی را دقیقاً بین دو خط «===شروع===» و «===پایان===» بگذار. "
         f"تحلیل را حداکثر ۲-۳ خط کن (یا ننویس) و سریع ===شروع=== را بگذار؛ بودجه توکن محدود است. "
         f"داخل دو علامت فقط مارکاپ جزوه باشد."
     )
@@ -1002,15 +1077,17 @@ hr{border:none;border-top:1px dashed #cbd5e1;margin:2em 0}
 # =========================================================
 #  تولید نهایی جزوه + PDF
 # =========================================================
-def produce_jozve(text: str, display_name: str, out_dir: str, progress=None) -> dict:
+def produce_jozve(text: str, display_name: str, out_dir: str, progress=None,
+                  custom_prompt: str = "") -> dict:
     try:
-        return _produce(text, display_name, out_dir, progress)
+        return _produce(text, display_name, out_dir, progress, custom_prompt)
     except Exception as e:
         log.exception(f"❌ خطای جزوه‌سازی: {e}")
         return {"ok": False, "error": str(e)[:300]}
 
 
-def _produce(text: str, display_name: str, out_dir: str, progress) -> dict:
+def _produce(text: str, display_name: str, out_dir: str, progress,
+             custom_prompt: str = "") -> dict:
     def _p(info: dict):
         if progress:
             try:
@@ -1019,11 +1096,13 @@ def _produce(text: str, display_name: str, out_dir: str, progress) -> dict:
                 pass
 
     if not has_provider():
-        return {"ok": False, "error": "کلید OPENROUTER_API_KEY تنظیم نشده است"}
+        return {"ok": False,
+                "error": "هیچ کلید هوش مصنوعی تنظیم نشده است (OPENROUTER_API_KEY یا DEEPSEEK_API_KEY)"}
     text = re.sub(r"\s+", " ", text).strip()
     words = text.split()
     if len(words) < 30:
         return {"ok": False, "error": "متن برای ساخت جزوه بسیار کوتاه است"}
+    custom_prompt = re.sub(r"\s+", " ", (custom_prompt or "").strip())[:600]
 
     _p({"stage": "plan"})
     plan = _plan_sections(text, display_name)
@@ -1033,16 +1112,17 @@ def _produce(text: str, display_name: str, out_dir: str, progress) -> dict:
         k = len(ranges)
         plan["sections"] = plan["sections"][:k]
 
-    # ---------- پیش‌چک سهمیه (قبل از هر درخواستی — تا جزوهٔ نصفه ساخته نشود) ----------
-    qs = free_quota_status()
-    remaining = qs.get("remaining")
-    if remaining is not None and remaining <= 0:
-        return {"ok": False, "quota": True,
-                "error": "سهمیهٔ روزانهٔ رایگان به پایان رسیده است"}
-    if remaining is not None and remaining < k + 1:
-        return {"ok": False, "quota": True,
-                "error": (f"سهمیهٔ باقی‌ماندهٔ امروز ({fa_num(remaining)} درخواست) برای این جزوه کافی نیست "
-                          f"(حدود {fa_num(k + 1)} درخواست لازم است). فردا مجدداً دکمه را بفشارید.")}
+    # ---------- پیش‌چک سهمیهٔ OpenRouter (با کلید DeepSeek مستقیم، سقف روزانه‌ای وجود ندارد) ----------
+    if KEYS:
+        qs = free_quota_status()
+        remaining = qs.get("remaining")
+        if remaining is not None and remaining <= 0:
+            return {"ok": False, "quota": True,
+                    "error": "سهمیهٔ روزانهٔ رایگان به پایان رسیده است"}
+        if remaining is not None and remaining < k + 1:
+            return {"ok": False, "quota": True,
+                    "error": (f"سهمیهٔ باقی‌ماندهٔ امروز ({fa_num(remaining)} درخواست) برای این جزوه کافی نیست "
+                              f"(حدود {fa_num(k + 1)} درخواست لازم است). فردا مجدداً دکمه را بفشارید.")}
 
     used = set()
     parts = []
@@ -1052,7 +1132,7 @@ def _produce(text: str, display_name: str, out_dir: str, progress) -> dict:
         a, b = ranges[i]
         _p({"stage": "section", "section": i + 1, "total": k, "title": sec["title"]})
         try:
-            parts.append(_write_section(words, i + 1, k, sec, a, b, used))
+            parts.append(_write_section(words, i + 1, k, sec, a, b, used, custom_prompt))
         except QuotaExhausted as qe:
             partial_note = f"سهمیهٔ روزانه در فصل {fa_num(i + 1)} از {fa_num(k)} به پایان رسید؛ این نسخه ناقص است"
             log.warning(f"⚠️ {qe} — تحویل نسخهٔ ناقص با {len(parts)} فصل")
@@ -1065,8 +1145,15 @@ def _produce(text: str, display_name: str, out_dir: str, progress) -> dict:
 
     markup = f"# {plan['title']}\n\n" + "\n\n".join(parts)
     words_out = len(markup.split())
-    provider = "OpenRouter · " + ", ".join(
-        sorted({m.split("/")[-1].replace(":free", "") for m in used}))[:70]
+    ds_used = sorted({m.split("/", 1)[-1] for m in used if m.startswith("deepseek/")})
+    or_used = sorted({m.split("/")[-1].replace(":free", "")
+                      for m in used if not m.startswith("deepseek/")})
+    pparts = []
+    if ds_used:
+        pparts.append("DeepSeek(" + ", ".join(ds_used) + ")")
+    if or_used:
+        pparts.append("OpenRouter(" + ", ".join(or_used) + ")")
+    provider = " + ".join(pparts)[:70]
 
     _p({"stage": "render"})
     base = re.sub(r"[^\w\u0600-\u06FF\- ]", "_", display_name)[:50].strip() or "jozve"
