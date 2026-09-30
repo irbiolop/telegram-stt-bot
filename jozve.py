@@ -103,6 +103,20 @@ DEEPSEEK_KEYS = [k.strip() for k in os.getenv(
     "DEEPSEEK_API_KEYS", os.getenv("DEEPSEEK_API_KEY", "")).split(",") if k.strip()]
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
+# --- Gemini رسمی (اختیاری) — endpoint سازگار با OpenAI؛ پلن رایگان AI Studio ---
+# توجه: کلیدهای جدید Google با «AQ.» شروع می‌شوند و فقط روی endpoint سازگار با OpenAI
+# با هدر Bearer کار می‌کنند؛ مدل پیش‌فرض باید مدل فعال فعلی گوگل باشد.
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+GEMINI_KEYS = [k.strip() for k in os.getenv(
+    "GEMINI_API_KEYS", os.getenv("GEMINI_API_KEY", "")).split(",") if k.strip()]
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+
+# --- Groq (اختیاری) — رایگان و بسیار سریع؛ ~۱هزار+ درخواست/روز ---
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_KEYS = [k.strip() for k in os.getenv(
+    "GROQ_API_KEYS", os.getenv("GROQ_API_KEY", "")).split(",") if k.strip()]
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+
 SECTION_WORDS = int(os.getenv("JOZVE_SECTION_WORDS", "2000"))  # طول تقریبی هر بازه (کلمه) — بزرگ‌تر = درخواست کمتر
 DEBUG_DIR = os.getenv("JOZVE_DEBUG_DIR", "")                  # اگر ست شود، پاسخ خام مدل ذخیره می‌شود
 
@@ -125,8 +139,13 @@ _FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 
 
 def has_provider() -> bool:
-    """آیا دست‌کم یک کلید (OpenRouter یا DeepSeek) تنظیم شده است؟"""
-    return bool(KEYS or DEEPSEEK_KEYS)
+    """آیا دست‌کم یک کلید (OpenRouter یا DeepSeek یا Gemini یا Groq) تنظیم شده است؟"""
+    return bool(KEYS or DEEPSEEK_KEYS or GEMINI_KEYS or GROQ_KEYS)
+
+
+def direct_keys_count() -> int:
+    """تعداد کلیدهای خارج از OpenRouter (بدون سقف ۵۰/روز) — DeepSeek/Gemini/Groq."""
+    return len(DEEPSEEK_KEYS) + len(GEMINI_KEYS) + len(GROQ_KEYS)
 
 
 class QuotaExhausted(Exception):
@@ -245,21 +264,23 @@ def _post_once(model, messages, max_tokens, temperature, timeout) -> dict:
             "error": "سهمیهٔ روزانهٔ همهٔ کلیدها به پایان رسیده است"}
 
 
-def _post_deepseek(messages, max_tokens, temperature, timeout) -> dict:
-    """درخواست مستقیم به API رسمی DeepSeek (سازگار با OpenAI) — بدون سقف سهمیهٔ روزانه.
-    هر کلید یک‌بار امتحان می‌شود؛ در خطا، فراخواننده به مدل‌های رایگان OpenRouter برمی‌گردد."""
-    for key in DEEPSEEK_KEYS:
+def _post_oai_compat(label, url, keys, model, messages, max_tokens,
+                     temperature, timeout, extra=None) -> dict:
+    """درخواست عمومی به API سازگار با OpenAI (DeepSeek/Gemini/Groq/…).
+    هر کلید یک‌بار امتحان می‌شود؛ در خطا، فراخواننده به تامین‌کنندهٔ بعدی فال‌بک می‌کند."""
+    for key in keys:
         try:
             t0 = time.time()
-            log.info(f"🤖 درخواست به DeepSeek ({DEEPSEEK_MODEL}) ...")
+            log.info(f"🤖 درخواست به {label} ({model}) ...")
+            body = {"model": model, "messages": messages,
+                    "max_tokens": max_tokens, "temperature": temperature}
+            if extra:
+                body.update(extra)
             r = requests.post(
-                DEEPSEEK_URL,
+                url,
                 headers={"Authorization": f"Bearer {key}",
                          "Content-Type": "application/json"},
-                timeout=timeout,
-                json={"model": DEEPSEEK_MODEL, "messages": messages,
-                      "max_tokens": max_tokens, "temperature": temperature,
-                      "frequency_penalty": 0.3, "presence_penalty": 0.2},
+                timeout=timeout, json=body,
             )
             if r.status_code == 200:
                 ch = (r.json().get("choices") or [{}])[0]
@@ -269,36 +290,63 @@ def _post_deepseek(messages, max_tokens, temperature, timeout) -> dict:
                     content = "".join(seg.get("text", "") for seg in content
                                       if isinstance(seg, dict))
                 if content and content.strip():
-                    log.info(f"✅ DeepSeek پاسخ داد در {time.time()-t0:.0f}s "
+                    log.info(f"✅ {label} پاسخ داد در {time.time()-t0:.0f}s "
                              f"(finish={ch.get('finish_reason')})")
                     _note_usage(1)
                     return {"ok": True, "text": content.strip(),
-                            "model": f"deepseek/{DEEPSEEK_MODEL}",
+                            "model": f"{label}/{model}",
                             "finish": ch.get("finish_reason") or ""}
-                return {"ok": False, "error": "پاسخ خالی از DeepSeek"}
+                return {"ok": False, "error": f"پاسخ خالی از {label}"}
             try:
                 em = ((r.json().get("error") or {}).get("message") or "")[:110]
             except Exception:
                 em = r.text[:110]
-            log.warning(f"⚠️ DeepSeek HTTP {r.status_code}: {em} — فال‌بک OpenRouter")
+            log.warning(f"⚠️ {label} HTTP {r.status_code}: {em} — فال‌بک به تامین‌کنندهٔ بعدی")
         except requests.exceptions.Timeout:
-            log.warning("⚠️ DeepSeek timeout — فال‌بک OpenRouter")
+            log.warning(f"⚠️ {label} timeout — فال‌بک به تامین‌کنندهٔ بعدی")
         except Exception as e:
-            log.warning(f"⚠️ DeepSeek خطا: {str(e)[:110]} — فال‌بک OpenRouter")
-    return {"ok": False, "error": "DeepSeek پاسخ نداد"}
+            log.warning(f"⚠️ {label} خطا: {str(e)[:110]} — فال‌بک به تامین‌کنندهٔ بعدی")
+    return {"ok": False, "error": f"{label} پاسخ نداد"}
+
+
+def _post_deepseek(messages, max_tokens, temperature, timeout) -> dict:
+    """درخواست مستقیم به API رسمی DeepSeek — بدون سقف سهمیهٔ روزانه."""
+    return _post_oai_compat("deepseek", DEEPSEEK_URL, DEEPSEEK_KEYS, DEEPSEEK_MODEL,
+                            messages, max_tokens, temperature, timeout,
+                            extra={"frequency_penalty": 0.3, "presence_penalty": 0.2})
+
+
+def _post_gemini(messages, max_tokens, temperature, timeout) -> dict:
+    """درخواست به Gemini (endpoint سازگار با OpenAI) — پلن رایگان AI Studio."""
+    return _post_oai_compat("gemini", GEMINI_URL, GEMINI_KEYS, GEMINI_MODEL,
+                            messages, max_tokens, temperature, timeout)
+
+
+def _post_groq(messages, max_tokens, temperature, timeout) -> dict:
+    """درخواست به Groq — رایگان، سریع، سقف روزانهٔ بزرگ (~۱هزار+ درخواست)."""
+    return _post_oai_compat("groq", GROQ_URL, GROQ_KEYS, GROQ_MODEL,
+                            messages, max_tokens, temperature, timeout,
+                            extra={"frequency_penalty": 0.3, "presence_penalty": 0.2})
 
 
 def _chat(messages, max_tokens=6000, temperature=0.2, timeout=150) -> dict:
-    """یک درخواست چت: اول DeepSeek رسمی (اگر کلید داشته باشد)، سپس مدل‌های رایگان OpenRouter؛
-    در خطا/۴۲۹ بین کلیدها و مدل‌های رایگان جابه‌جا می‌شود."""
-    if not KEYS and not DEEPSEEK_KEYS:
+    """یک درخواست چت با زنجیرهٔ تامین‌کننده‌ها:
+    DeepSeek → Gemini → Groq → مدل‌های رایگان OpenRouter؛
+    در خطا/سهمیهٔ تمام بین همهٔ گزینه‌ها جابه‌جا می‌شود."""
+    if not (KEYS or DEEPSEEK_KEYS or GEMINI_KEYS or GROQ_KEYS):
         return {"ok": False, "error": "هیچ کلید هوش مصنوعی تنظیم نشده است"}
-    if DEEPSEEK_KEYS:
-        r = _post_deepseek(messages, max_tokens, temperature, timeout)
+    for post_fn in (_post_deepseek, _post_gemini, _post_groq):
+        if post_fn is _post_deepseek and not DEEPSEEK_KEYS:
+            continue
+        if post_fn is _post_gemini and not GEMINI_KEYS:
+            continue
+        if post_fn is _post_groq and not GROQ_KEYS:
+            continue
+        r = post_fn(messages, max_tokens, temperature, timeout)
         if r.get("ok"):
             return r
     if not KEYS:
-        return {"ok": False, "error": "کلید OpenRouter تنظیم نشده و DeepSeek هم پاسخ نداد"}
+        return {"ok": False, "error": "هیچ‌کدام از تامین‌کننده‌ها پاسخ ندادند و کلید OpenRouter هم تنظیم نشده"}
     errors = []
     for _round in range(2):  # دو دور کامل روی لیست مدل‌ها
         for model in MODELS:
@@ -306,6 +354,19 @@ def _chat(messages, max_tokens=6000, temperature=0.2, timeout=150) -> dict:
             if r.get("ok"):
                 return r
             if r.get("quota"):   # سهمیهٔ همهٔ کلیدها تمام است — رفتن به مدل بعدی بی‌فایده است
+                # اگر تامین‌کنندهٔ مستقیم داریم، ناامید نشو — شاید دفعهٔ قبل خطا بود
+                if direct_keys_count():
+                    rr = None
+                    for post_fn in (_post_deepseek, _post_gemini, _post_groq):
+                        if post_fn is _post_deepseek and not DEEPSEEK_KEYS:
+                            continue
+                        if post_fn is _post_gemini and not GEMINI_KEYS:
+                            continue
+                        if post_fn is _post_groq and not GROQ_KEYS:
+                            continue
+                        rr = post_fn(messages, max_tokens, temperature, timeout)
+                        if rr.get("ok"):
+                            return rr
                 return r
             errors.append(f"{model}: {r.get('error')}")
             time.sleep(1.5)
@@ -742,25 +803,140 @@ def _inline(s: str) -> str:
     return s
 
 
+_MERMAID_TYPES = ("mindmap", "flowchart", "graph", "sequenceDiagram", "classDiagram",
+                  "stateDiagram", "erDiagram", "gantt", "pie", "journey", "timeline")
+
+
+def _sanitize_mermaid(src: str) -> str:
+    """پاک‌سازی رایج‌ترین خرابی‌های سینتکس مرماید که LLM تولید می‌کند —
+    اگر مرماید پارس نشود، مرورگر کادر خالی و mermaid.ink خطا می‌دهد؛ این تابع جلوی هر دو را می‌گیرد."""
+    s = (src or "").replace("\t", "    ").replace("\u200c", " ")
+    s = s.replace("\u00a0", " ")
+    lines = []
+    for ln in s.split("\n"):
+        t = ln.rstrip()
+        # نقطه‌ویرگول انتهایی و بولد مارک‌داونی داخل دیاگرام مجاز نیست
+        t = re.sub(r";\s*$", "", t)
+        t = t.replace("**", "")
+        # کاراکترهای کنترلی غیر از خط جدید
+        t = "".join(ch for ch in t if ch == " " or ord(ch) >= 32)
+        lines.append(t)
+    # حذف خط‌های خالی ابتدایی/انتهایی
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if not lines:
+        return ""
+    # اگر خط اول نوع دیاگرام نیست و شبیه تورفتگی است، mindmap فرض می‌شود
+    first = lines[0].strip()
+    if not any(first.startswith(t) for t in _MERMAID_TYPES):
+        # شاید نوع دیاگرام با کامنت/خط خالی جابه‌جا شده باشد
+        idx = next((i for i, ln in enumerate(lines[:4])
+                    if any(ln.strip().startswith(t) for t in _MERMAID_TYPES)), -1)
+        if idx > 0:
+            lines = lines[idx:]
+        else:
+            lines.insert(0, "mindmap")
+    # خط نوع دیاگرام نباید تورفتگی داشته باشد
+    lines[0] = lines[0].lstrip()
+    return "\n".join(lines)
+
+
+def _mindmap_label(t: str) -> str:
+    """برهنه‌کردن شناسهٔ گره و شکلک‌های مرماید: root((x)) → x ، A[x] → x ، ((x)) → x"""
+    t = t.strip()
+    # شناسهٔ گره قبل از شکلک: root((x)) یا id[x] یا id(x) یا id{x} یا id)x(
+    m = re.match(r"^[A-Za-z_][\w\-]*\s*((?:\(\(+|\[+|\{+|\()+)(.*?)(?:\)+|\]+|\}+|\)+)$", t)
+    if m and m.group(2):
+        t = m.group(2)
+    else:
+        m = re.match(r"^(?:\(\(+|\[+|\{+|\(+)(.*?)(?:\)+|\]+|\}+|\)+)$", t)
+        if m and m.group(1):
+            t = m.group(1)
+    return t.strip()
+
+
+def _mindmap_tree_html(src: str) -> str:
+    """فال‌بک همیشه‌کارکرد برای mindmap: درخت را خودمان پارس و با HTML/CSS خالص می‌کشیم —
+    نیازی به مرورگر، CDN یا سرویس بیرونی ندارد و هرگز خالی نمی‌ماند."""
+    try:
+        lines = [ln for ln in src.split("\n") if ln.strip()]
+        if not lines or not lines[0].strip().startswith("mindmap"):
+            return ""
+        items = []   # (depth, text)
+        for ln in lines[1:]:
+            indent = len(ln) - len(ln.lstrip(" "))
+            txt = re.sub(r"^[*-]\s+", "", ln.strip())
+            txt = _mindmap_label(txt)
+            if txt:
+                items.append((indent, txt))
+        if not items:
+            return ""
+        base = min(d for d, _ in items)
+        html_out = ['<div class="mtree"><ul>']
+        prev_depth = base - 2   # هرچه کوچک‌تر از ریشه، تا باز شدن اولین <li> مطمئن شویم
+        stack_open = []         # تعداد <ul> باز
+        for depth, txt in items:
+            if depth > prev_depth + 2:   # پرش تورفتگی غیرعادی را محدود کن
+                depth = prev_depth + 2
+            while stack_open and depth <= prev_depth - 2:
+                html_out.append("</li></ul></li>")
+                stack_open.pop()
+                prev_depth -= 2
+            if depth == prev_depth + 2:
+                html_out.append("<ul><li>")
+                stack_open.append(1)
+            elif depth == prev_depth:
+                html_out.append("</li><li>")
+            elif depth < prev_depth:
+                while stack_open and depth < prev_depth:
+                    html_out.append("</li></ul></li>")
+                    stack_open.pop()
+                    prev_depth -= 2
+                html_out.append("<li>")
+            else:   # پرش باقی‌مانده → همان سطح قبلی
+                html_out.append("</li><li>")
+            html_out.append(f'<span class="mnode d{min(3, len(stack_open))}">{html.escape(txt)}</span>')
+            prev_depth = depth
+        for _ in stack_open:
+            html_out.append("</li></ul></li>")
+        html_out.append("</li></ul></div>")
+        out = "".join(html_out)
+        return ('<div class="diagram"><div class="mtag">نقشهٔ ذهنی</div>' + out + "</div>")
+    except Exception as e:
+        log.warning(f"⚠️ پارس mindmap ناموفق: {e}")
+        return ""
+
+
 def _mermaid_html(src: str, mode: str) -> str:
+    src = _sanitize_mermaid(src)
     if mode == "js":
         return (f'<div class="diagram"><pre class="mermaid">'
                 f'{html.escape(src)}</pre></div>')
     # حالت PDF: تبدیل به تصویر با سرویس mermaid.ink
-    try:
-        state = json.dumps({"code": src, "mermaid": {"theme": "default"}})
-        b64 = base64.urlsafe_b64encode(state.encode()).decode()
-        url = f"https://mermaid.ink/img/{b64}?type=png&width=900"
-        rr = requests.get(url, timeout=40,
-                          headers={"User-Agent": "Mozilla/5.0 jozve-bot"})
-        ct = rr.headers.get("Content-Type", "")
-        if rr.status_code == 200 and "image" in ct and len(rr.content) > 500:
-            uri = "data:image/png;base64," + base64.b64encode(rr.content).decode()
-            return f'<div class="diagram"><img src="{uri}" alt="نمودار ذهنی"/></div>'
-    except Exception as e:
-        log.warning(f"⚠️ mermaid.ink ناموفق: {e}")
-    return (f'<div class="diagram"><pre class="mfail">'
-            f'{html.escape(src)}</pre></div>')
+    if src:
+        try:
+            state = json.dumps({"code": src, "mermaid": {"theme": "default"}})
+            b64 = base64.urlsafe_b64encode(state.encode()).decode()
+            url = f"https://mermaid.ink/img/{b64}?type=png&width=900"
+            rr = requests.get(url, timeout=30,
+                              headers={"User-Agent": "Mozilla/5.0 jozve-bot"})
+            ct = rr.headers.get("Content-Type", "")
+            if rr.status_code == 200 and "image" in ct and len(rr.content) > 500:
+                uri = "data:image/png;base64," + base64.b64encode(rr.content).decode()
+                return f'<div class="diagram"><img src="{uri}" alt="نمودار ذهنی"/></div>'
+            log.warning(f"⚠️ mermaid.ink HTTP {rr.status_code} — فال‌بک به رندر داخلی")
+        except Exception as e:
+            log.warning(f"⚠️ mermaid.ink ناموفق: {e} — فال‌بک به رندر داخلی")
+    # فال‌بک ۱: mindmap را با HTML/CSS خالص می‌کشیم (همیشه کار می‌کند، هرگز خالی نمی‌ماند)
+    if src.strip().startswith("mindmap"):
+        tree = _mindmap_tree_html(src)
+        if tree:
+            return tree
+    # فال‌بک ۲: کد منبع دیاگرام در کادر خوانا (هیچ‌وقت متن خالی نمی‌ماند)
+    return (f'<div class="diagram"><div class="mtag">نمودار — نسخهٔ متنی</div>'
+            f'<pre class="mcode">{html.escape(src)}</pre></div>')
 
 
 def _chart_html(src: str) -> str:
@@ -958,7 +1134,7 @@ def render_html(markup: str, *, title: str, source: str, mode: str = "js", note:
     mermaid_js = ""
     if mode == "js":
         mermaid_js = ('<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js">'
-                      '</script><script>mermaid.initialize({startOnLoad:true,theme:"neutral"});</script>')
+                      '</script><script>mermaid.initialize({startOnLoad:true,theme:"neutral",fontFamily:"Vazirmatn, Tahoma, sans-serif"});</script>')
 
     return f"""<!DOCTYPE html>
 <html lang="fa" dir="rtl">
@@ -1054,8 +1230,19 @@ tr:nth-child(even) td{background:#f8fafc}
 .diagram{background:#fff;border:1px dashed #c7d2fe;border-radius:12px;padding:14px;margin:1.2em 0;
          overflow-x:auto;text-align:center}
 .diagram img{max-width:100%;height:auto}
-pre.mermaid,pre.mfail{background:transparent;font-family:inherit;margin:0;white-space:pre-wrap}
-pre.mfail{background:#f8fafc;border-radius:8px;padding:12px;color:#475569;text-align:right;font-size:13.5px}
+pre.mermaid,pre.mcode{background:transparent;font-family:inherit;margin:0;white-space:pre-wrap}
+pre.mcode{background:#f8fafc;border-radius:8px;padding:12px;color:#334155;text-align:right;font-size:13px;line-height:1.9}
+.mtag{display:inline-block;background:#eef2ff;color:#4338ca;border-radius:6px;padding:2px 10px;font-size:12px;margin-bottom:8px;font-weight:bold}
+.mtree ul{list-style:none;margin:0;padding-right:14px;position:relative}
+.mtree>ul{padding-right:0}
+.mtree ul::before{content:"";position:absolute;right:4px;top:0;bottom:6px;width:2px;background:#c7d2fe;border-radius:2px}
+.mtree li{margin:5px 0;position:relative;padding-right:14px}
+.mtree li::before{content:"";position:absolute;right:-10px;top:50%;width:12px;height:2px;background:#c7d2fe;border-radius:2px}
+.mnode{display:inline-block;border-radius:9px;padding:4px 12px;font-size:13.5px;margin:2px 0}
+.mnode.d0{background:#eef2ff;color:#312e81;border:1.5px solid #a5b4fc;font-weight:bold}
+.mnode.d1{background:#f0fdf4;color:#14532d;border:1.5px solid #86efac}
+.mnode.d2{background:#fefce8;color:#713f12;border:1.5px solid #fde047}
+.mnode.d3{background:#fdf2f8;color:#831843;border:1.5px solid #f9a8d4}
 pre.code{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:14px 18px;overflow-x:auto;
          direction:ltr;text-align:left;font-size:13.5px}
 hr{border:none;border-top:1px dashed #cbd5e1;margin:2em 0}
@@ -1097,7 +1284,7 @@ def _produce(text: str, display_name: str, out_dir: str, progress,
 
     if not has_provider():
         return {"ok": False,
-                "error": "هیچ کلید هوش مصنوعی تنظیم نشده است (OPENROUTER_API_KEY یا DEEPSEEK_API_KEY)"}
+                "error": "هیچ کلید هوش مصنوعی تنظیم نشده است (OPENROUTER_API_KEY یا DEEPSEEK_API_KEY یا GEMINI_API_KEY یا GROQ_API_KEY)"}
     text = re.sub(r"\s+", " ", text).strip()
     words = text.split()
     if len(words) < 30:
@@ -1112,8 +1299,10 @@ def _produce(text: str, display_name: str, out_dir: str, progress,
         k = len(ranges)
         plan["sections"] = plan["sections"][:k]
 
-    # ---------- پیش‌چک سهمیهٔ OpenRouter (با کلید DeepSeek مستقیم، سقف روزانه‌ای وجود ندارد) ----------
-    if KEYS:
+    # ---------- پیش‌چک سهمیهٔ OpenRouter ----------
+    # اگر تامین‌کنندهٔ مستقیم (DeepSeek/Gemini/Groq) داریم، اتمام سهمیهٔ OpenRouter بحرانی نیست؛
+    # _chat خودش به آن‌ها فال‌بک می‌کند، پس پیش‌چک سفت فقط وقتی معنا دارد که فقط OpenRouter داریم.
+    if KEYS and not direct_keys_count():
         qs = free_quota_status()
         remaining = qs.get("remaining")
         if remaining is not None and remaining <= 0:
@@ -1146,11 +1335,17 @@ def _produce(text: str, display_name: str, out_dir: str, progress,
     markup = f"# {plan['title']}\n\n" + "\n\n".join(parts)
     words_out = len(markup.split())
     ds_used = sorted({m.split("/", 1)[-1] for m in used if m.startswith("deepseek/")})
+    gm_used = sorted({m.split("/", 1)[-1] for m in used if m.startswith("gemini/")})
+    gq_used = sorted({m.split("/", 1)[-1] for m in used if m.startswith("groq/")})
     or_used = sorted({m.split("/")[-1].replace(":free", "")
-                      for m in used if not m.startswith("deepseek/")})
+                      for m in used if not m.split("/", 1)[0] in ("deepseek", "gemini", "groq")})
     pparts = []
     if ds_used:
         pparts.append("DeepSeek(" + ", ".join(ds_used) + ")")
+    if gm_used:
+        pparts.append("Gemini(" + ", ".join(gm_used) + ")")
+    if gq_used:
+        pparts.append("Groq(" + ", ".join(gq_used) + ")")
     if or_used:
         pparts.append("OpenRouter(" + ", ".join(or_used) + ")")
     provider = " + ".join(pparts)[:70]
