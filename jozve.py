@@ -416,6 +416,8 @@ mindmap
 ```
 
 ⚠️ هیچ ایموجی در خروجی استفاده نکن. قبل از هر دستور و بعد از آن یک خط خالی بگذار.
+⚠️ تیترها همیشه فاصله بعد از # دارند («## تیتر» درست است، «##تیتر» غلط). هرگز # یا * یا __
+   را وسط متن معمولی ننویس؛ ** و __ دقیقاً جفت و دور همان چند کلمه باشند.
 """
 
 SYSTEM_EDITOR = (
@@ -622,6 +624,62 @@ def quality_report(frag: str) -> dict:
             "problems": hard + soft, "persian_ratio": round(_persian_ratio(frag), 2)}
 
 
+_SENTINEL_RE = re.compile(r"^\s*={2,}\s*(?:شروع|پایان|start|end)\s*={2,}\s*$", re.IGNORECASE)
+
+
+def _normalize_markup(markup: str, *, first_hash_is_title: bool = False) -> str:
+    """پاکسازی آرتیفکت‌های مارک‌داونی که مدل‌ها گاهی قاطی متن می‌کنند (گزارش کاربر:
+    «هشتگ و ستاره و اینا می‌آمد تو متن»):
+      - تیتر بدون فاصله: «##عنوان» → «## عنوان»
+      - تیتر عمیق: «##### تیتر» → «### تیتر» (عمق بیش از ۳ پشتیبانی نمی‌شود)
+      - هشتگ پایانی تیتر: «## عنوان ##» → «## عنوان» و «## #عنوان» → «## عنوان»
+      - تیترهای «#» سطح‌یک وسط جزوه → «##» (وگرنه موقع رندر کلاً حذف می‌شدند)
+      - بولد آندرلاینی: «__متن__» → «**متن**» (و هر تیتری که ** یا # داخلش باشد)
+      - گلولهٔ ستاره‌ای بدون فاصله: «*مهم» در ابتدای خط → «- مهم»
+      - سنتینلِ جامانده «===شروع===» / «===پایان===» حذف می‌شود
+    داخل بلوک‌های ``` (مرماید/چارت/کد) دست نمی‌زند. شناسه (idempotent) است."""
+    if not markup:
+        return markup
+    out, fence = [], None
+    title_seen = not first_hash_is_title
+    for ln in markup.split("\n"):
+        st = ln.strip()
+        if fence is None:
+            if st.startswith("```"):
+                fence = st[3:].strip().lower() or "code"
+                out.append(ln)
+                continue
+        else:
+            if st.startswith("```"):
+                fence = None
+            out.append(ln)
+            continue
+        if _SENTINEL_RE.match(st):
+            continue
+        # ---- تیترها ----
+        m = re.match(r"^\s*(#{1,6})(\s*)(.*)$", ln)
+        if m:
+            n = len(m.group(1))
+            txt = m.group(3).strip()
+            txt = re.sub(r"\s*#+\s*$", "", txt)          # «## عنوان ##» → «## عنوان»
+            txt = txt.replace("#", " ").replace("**", "")  # «## #عنوان» / «## **عنوان**»
+            txt = re.sub(r"\s{2,}", " ", txt).strip()
+            if n == 1:
+                n = 1 if not title_seen else 2
+                title_seen = True
+            n = min(n, 3)
+            ln = ("#" * n + " " + txt) if txt else ""
+            out.append(ln)
+            continue
+        # ---- بولد آندرلاینی → شکل ستاره‌ای (خط‌خورده ~ هم در _inline پشتیبانی می‌شود) ----
+        ln = re.sub(r"(?<![\w\\])__([^_\n]+)__(?!\w)", r"**\1**", ln)
+        # ---- گلولهٔ ستاره‌ای بدون فاصله: «*مهم» (بدون ستارهٔ پایانی) → آیتم فهرست ----
+        if re.match(r"^\*(?=\S)", ln) and ln.count("*") == 1:
+            ln = "- " + ln[1:]
+        out.append(ln)
+    return "\n".join(out)
+
+
 def _clean_fragment(t: str) -> str:
     """استخراج جواب نهایی: سنتینل → حذف reasoning → حذف بلوک ``` و مقدمه‌ها"""
     t = t.strip()
@@ -639,7 +697,7 @@ def _clean_fragment(t: str) -> str:
             if idx and idx <= 4:  # فقط مقدمهٔ کوتاه را ببر
                 lines = lines[idx:]
             break
-    return "\n".join(lines).strip()
+    return _normalize_markup("\n".join(lines)).strip()
 
 
 def _write_section(words, i, k, sec: dict, a: int, b: int, used: set,
@@ -797,10 +855,19 @@ _CALLOUTS = {
 def _inline(s: str) -> str:
     s = html.escape(s, quote=False)
     s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
+    s = re.sub(r"(?<![\w*])__([^_\n]+)__(?![\w*])", r"<b>\1</b>", s)
     s = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", s)
     s = re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
     s = re.sub(r"==(.+?)==", r"<mark>\1</mark>", s)
-    return s
+    s = re.sub(r"~~([^~\n]+)~~", r"<s>\1</s>", s)
+    # ---- سد نهایی: هر مارک‌داونی که تا اینجا باز/بستهٔ ناقص مانده از متن پاک می‌شود ----
+    s = re.sub(r"\*{2,}", " ", s)     # ** جامانده از بولد ناقص
+    s = re.sub(r"_{2,}", " ", s)      # __ جامانده
+    s = re.sub(r"~{2,}", " ", s)      # ~~ جامانده
+    # هشتگِ قاطی متن («#ریاضی» یا «##ریاضی») — علامت حذف، خود کلمه می‌ماند؛ «C#» دست نمی‌خورد
+    s = re.sub(r"(?<![\S#])#+(?=[\u0600-\u06FF])", "", s)
+    s = re.sub(r"\s{2,}", " ", s)
+    return s.strip()
 
 
 _MERMAID_TYPES = ("mindmap", "flowchart", "graph", "sequenceDiagram", "classDiagram",
@@ -995,6 +1062,7 @@ def _split_row(line: str):
 
 def render_html(markup: str, *, title: str, source: str, mode: str = "js", note: str = "") -> str:
     """مارکاپ کامل جزوه → صفحهٔ HTML مستقل (mode=js تعاملی برای کاربر، img مخصوص PDF)."""
+    markup = _normalize_markup(markup or "", first_hash_is_title=True)
     out, toc = [], []
     h2n = 0
     emoji_ok = (mode == "js")
@@ -1042,7 +1110,8 @@ def render_html(markup: str, *, title: str, source: str, mode: str = "js", note:
             while i < len(lines) and not lines[i].strip().startswith(":::"):
                 ln = lines[i].strip()
                 if ln:
-                    inner.append(ln)
+                    # تیتر مارک‌داونی داخل کادر جایی ندارد — فقط متنش می‌ماند
+                    inner.append(re.sub(r"^#{1,6}\s*", "", ln))
                 i += 1
             i += 1
             body = "".join(f"<p>{_inline(x)}</p>" for x in inner)
@@ -1105,13 +1174,13 @@ def render_html(markup: str, *, title: str, source: str, mode: str = "js", note:
             flush_para()
             qs = []
             while i < len(lines) and lines[i].strip().startswith(">"):
-                qs.append(lines[i].strip().lstrip(">").strip())
+                qs.append(re.sub(r"^#{1,6}\s*", "", lines[i].strip().lstrip(">").strip()))
                 i += 1
             out.append("<blockquote>" + _inline(" ".join(qs)) + "</blockquote>")
             continue
 
         # ---- خط جداکننده ----
-        if re.match(r"^(-{3,}|\*{3,}|_{3,})$", s):
+        if re.match(r"^(-{3,}|\*{3,}|_{3,}|={3,})$", s):
             flush_para()
             out.append("<hr/>")
             i += 1
