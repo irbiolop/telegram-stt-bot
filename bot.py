@@ -1285,15 +1285,60 @@ def start_health_server():
     HF Spaces انتظار دارد اپ روی پورت 7860 (HTTP) گوش بدهد؛
     یک وب‌سرور فوق‌سبک استاندارد پایتون روشن می‌کنیم تا:
       ۱) Space وضعیت «Running» بگیرد   ۲) پینگ ضدخواب (cron-job.org و...) جواب بگیرد
+      ۳) /llm-status — عیب‌یابی زندهٔ کلیدهای هوش مصنوعی (بدون افشای خود کلیدها)
     """
     global _health_started
     if _health_started or HEALTH_PORT <= 0:
         return
     try:
+        import json as _json
         from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        def _llm_status():
+            """بررسی سبک هر تامین‌کننده (فقط endpointهای ارزان و بدون مصرف سهمیهٔ درخواست مدل)."""
+            res = {}
+            keys = jozve.KEYS
+            res["openrouter"] = {"configured": bool(keys), "keys": len(keys)}
+            if keys:
+                try:
+                    r = requests.get("https://openrouter.ai/api/v1/key",
+                                     headers={"Authorization": f"Bearer {jozve._current_key()}"},
+                                     timeout=10)
+                    fr = ((r.json().get("data") or {}).get("free_model_daily_requests") or {}) \
+                        if r.status_code == 200 else {}
+                    res["openrouter"].update({
+                        "ok": r.status_code == 200,
+                        "remaining": fr.get("remaining"), "limit": fr.get("limit")})
+                except Exception as e:
+                    res["openrouter"].update({"ok": False, "error": str(e)[:80]})
+            for name, keys_list, url in (
+                    ("gemini", jozve.GEMINI_KEYS, "https://generativelanguage.googleapis.com/v1beta/openai/models"),
+                    ("groq", jozve.GROQ_KEYS, "https://api.groq.com/openai/v1/models"),
+                    ("deepseek", jozve.DEEPSEEK_KEYS, "https://api.deepseek.com/models")):
+                res[name] = {"configured": bool(keys_list), "keys": len(keys_list)}
+                if keys_list:
+                    try:
+                        r = requests.get(url, headers={
+                            "Authorization": f"Bearer {keys_list[0]}"}, timeout=10)
+                        res[name].update({
+                            "ok": r.status_code == 200,
+                            "http": r.status_code,
+                            "error": "" if r.status_code == 200 else r.text[:90]})
+                    except Exception as e:
+                        res[name].update({"ok": False, "error": str(e)[:80]})
+            return res
 
         class HealthHandler(BaseHTTPRequestHandler):
             def do_GET(self):
+                path = (self.path or "/").split("?")[0]
+                if path == "/llm-status":
+                    body = _json.dumps(_llm_status(), ensure_ascii=False).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(b"STT Telegram Bot is alive!")
