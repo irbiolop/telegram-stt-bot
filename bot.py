@@ -13,6 +13,7 @@
   ✅ قابلیت لغو پردازش با دستور /cancel
   ✅ خروجی هوشمند: متن کوتاه در چت — متن طولانی به‌صورت فایل txt با تایم‌استمپ
   ✅ فقط فارسی (fa-IR) — قابل تغییر در تنظیمات
+  ✅ پذیرش لینک: مستقیم / گوگل‌درایو / صفحهٔ سایت‌های ویدئویی (yt-dlp)
 
 متغیرهای محیطی موردنیاز (یا مقادیر را مستقیم در بخش تنظیمات بگذارید):
   API_ID    ← از my.telegram.org  (رایگان)
@@ -360,9 +361,11 @@ def confirm_text(st: dict) -> str:
     ranges = st.get("skip_ranges") or []
     skip_txt = ("، ".join(f"{fmt_seconds(a)} تا {fmt_seconds(b)}" for a, b in ranges)
                 if ranges else "ندارد")
+    size_mb = st.get("size_mb") or 0
+    size_txt = f" ({size_mb:.0f} مگابایت)" if size_mb > 0 else " (حجم هنگام دانلود مشخص می‌شود)"
     return (
         "خلاصهٔ تنظیمات تبدیل:\n"
-        f"• فایل: {str(st.get('display_name'))[:60]} ({st.get('size_mb', 0):.0f} مگابایت)\n"
+        f"• فایل: {str(st.get('display_name'))[:60]}{size_txt}\n"
         f"• زبان گفتار: {st.get('lang_name', '—')}\n"
         f"• بخش‌های حذفی: {skip_txt}\n\n"
         "با زدن «تأیید و شروع تبدیل»، دریافت و تبدیل آغاز می‌شود."
@@ -724,6 +727,325 @@ async def process_file(event, src_path: str, display_name: str, token: str, want
 
 
 # =========================================================
+#  پذیرش لینک (URL) — لینک مستقیم / گوگل‌درایو / صفحهٔ سایت‌ها
+# =========================================================
+from urllib.parse import urlparse, unquote as _unquote
+from html import unescape as _unescape
+
+URL_RE = re.compile(r"https?://[^\s<>\"'،؛«»]+", re.IGNORECASE)
+_URL_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+           "Chrome/124.0.0.0 Safari/537.36")
+_MEDIA_EXT_RE = re.compile(
+    r"\.(mp3|mp4|m4a|m4b|wav|ogg|oga|opus|flac|aac|wma|mkv|avi|mov|webm|3gp|amr)([\?#]|$)",
+    re.IGNORECASE)
+_MIME_EXT = {
+    "audio/mpeg": ".mp3", "audio/mp3": ".mp3", "audio/mp4": ".m4a", "audio/x-m4a": ".m4a",
+    "audio/wav": ".wav", "audio/x-wav": ".wav", "audio/wave": ".wav", "audio/ogg": ".ogg",
+    "audio/opus": ".opus", "audio/flac": ".flac", "audio/x-flac": ".flac", "audio/aac": ".aac",
+    "audio/amr": ".amr", "video/mp4": ".mp4", "video/x-matroska": ".mkv", "video/webm": ".webm",
+    "video/quicktime": ".mov", "video/x-msvideo": ".avi",
+}
+
+
+class _UrlCancelled(Exception):
+    """کاربر با /cancel دانلود لینک را قطع کرده است"""
+
+
+class _UrlTooLarge(Exception):
+    """حجم فایلِ در حال دانلود از سقف مجاز گذشت"""
+
+
+def _drive_file_id(url: str):
+    """شناسهٔ فایل از انواع لینک گوگل‌درایو؛ برای پوشه خطای واضح می‌دهد"""
+    if re.search(r"drive\.google\.com/drive/(?:mobile/)?folders/", url):
+        raise ValueError(
+            "این لینک «پوشهٔ» گوگل‌درایو است و قابل پردازش نیست؛\n"
+            "لینک خودِ فایل را بفرستید (روی فایل راست‌کلیک ← اشتراک‌گذاری ← کپی لینک)."
+        )
+    m = (re.search(r"(?:drive|docs)\.google\.com/(?:file/d/|open\?id=|uc\?[^#]*?id=)([\w-]{10,})", url)
+         or re.search(r"drive\.usercontent\.google\.com/(?:download|uc)\?[^#]*?id=([\w-]{10,})", url))
+    return m.group(1) if m else None
+
+
+def _name_from_cd(cd: str) -> str:
+    """نام فایل از هدر Content-Disposition — با پشتیبانی از filename* و نام فارسی"""
+    if not cd:
+        return ""
+    m = re.search(r"filename\*\s*=\s*(?:UTF-8|utf-8)''([^;\r\n]+)", cd)
+    if m:
+        return _unquote(m.group(1).strip().strip('"')).strip()
+    m = re.search(r'filename\s*=\s*"?([^";\r\n]+)"?', cd)
+    return m.group(1).strip() if m else ""
+
+
+def _name_from_url(url: str) -> str:
+    try:
+        return os.path.basename(_unquote(urlparse(url).path or "")).strip()
+    except Exception:
+        return ""
+
+
+def _media_name(url: str, headers=None, ct: str = "") -> str:
+    """نام فایل: Content-Disposition ← مسیر لینک ← پسوند از Content-Type"""
+    name = _name_from_cd((headers or {}).get("Content-Disposition", "")) if headers else ""
+    if not name:
+        name = _name_from_url(url)
+    if name and re.search(r"\.[A-Za-z0-9]{1,8}$", name):
+        return name                                  # نام کامل با پسوند
+    ext = _MIME_EXT.get((ct or "").split(";")[0].strip().lower(), "") if ct else ""
+    if not name:
+        return ("media" + ext) if ext else "media"
+    return name + ext
+
+
+def url_probe(url: str) -> dict:
+    """بررسی سبک لینک پیش از شروع تنظیم‌ها — بدون دانلود بدنه (فقط هدرها)"""
+    fid = _drive_file_id(url)          # پوشه ← ValueError با پیام راهنما
+    if fid:
+        return {"kind": "drive", "id": fid, "name": "", "size": -1}
+    if urlparse(url).path.lower().endswith(".m3u8"):   # پخش زنده/آلبوم ← مسیر yt-dlp
+        return {"kind": "page", "id": "", "name": "", "size": -1}
+    resp = requests.get(url, stream=True, timeout=(15, 40), allow_redirects=True,
+                        headers={"User-Agent": _URL_UA, "Accept": "*/*"})
+    try:
+        if resp.status_code >= 400:
+            raise ValueError(f"سرور پاسخ خطا داد (کد {resp.status_code})؛ "
+                             "مطمئن شوید لینک درست و در دسترس است.")
+        ct = (resp.headers.get("Content-Type") or "").lower()
+        size_raw = resp.headers.get("Content-Length") or ""
+        size = int(size_raw) if size_raw.isdigit() else -1
+        if "text/html" in ct and not _MEDIA_EXT_RE.search(url):
+            return {"kind": "page", "id": "", "name": "", "size": -1}
+        return {"kind": "file", "id": "", "name": _media_name(url, resp.headers, ct), "size": size}
+    finally:
+        try:
+            resp.close()
+        except Exception:
+            pass
+
+
+def _stream_to_file(resp, dest: str, status, token: str, total: int, loop=None) -> str:
+    """دانلود استریمی به دیسک — با سقف حجم، گزارش پیشرفت و لغو با /cancel"""
+    cap = MAX_FILE_MB * 1024 * 1024
+    done = 0
+    last = 0.0
+
+    def _edit(txt: str):
+        if loop is not None and status is not None:
+            asyncio.run_coroutine_threadsafe(safe_edit(status, txt), loop)
+
+    with open(dest, "wb") as f:
+        for chunk in resp.iter_content(chunk_size=256 * 1024):
+            if token in cancelled_tokens:
+                raise _UrlCancelled()
+            if not chunk:
+                continue
+            done += len(chunk)
+            if done > cap:
+                raise _UrlTooLarge(f"حجم فایل بیش از سقف مجاز ({MAX_FILE_MB} مگابایت) است؛ "
+                                   "دانلود نیمه‌کاره کنار گذاشته شد.")
+            f.write(chunk)
+            now = time.time()
+            if now - last >= 8:
+                last = now
+                mb = done / (1024 * 1024)
+                if total > 0:
+                    _edit(f"در حال دریافت فایل از لینک... {done * 100.0 / max(1, total):.0f}٪ ({mb:.0f}MB)")
+                else:
+                    _edit(f"در حال دریافت فایل از لینک... ({mb:.0f}MB)")
+    return dest
+
+
+def _drive_confirm_form(html: str):
+    """فرم تأیید دانلود درایو را می‌کاود ← (action، پارامترها) یا None"""
+    m = re.search(r'action="([^"]+)"', html)
+    inputs = dict(re.findall(r'name="([^"]+)"\s+value="([^"]*)"', html))
+    if not inputs:   # ترتیب معکوسِ صفت‌ها
+        for mm in re.finditer(r'value="([^"]*)"\s+name="([^"]+)"', html):
+            inputs[mm.group(2)] = mm.group(1)
+    if not m or not inputs:
+        return None
+    action = _unescape(m.group(1))
+    if not action.startswith("http"):
+        action = "https://drive.usercontent.google.com" + action
+    return action, inputs
+
+
+def _drive_open(fid: str):
+    """اتصال استریمی به فایل گوگل‌درایو — با گذر از صفحهٔ تأیید فایل‌های حجیم"""
+    sess = requests.Session()
+    sess.headers.update({"User-Agent": _URL_UA})
+    r = sess.get("https://drive.usercontent.google.com/download",
+                 params={"id": fid, "export": "download", "authuser": "0"},
+                 stream=True, timeout=(15, 60))
+    if "text/html" in (r.headers.get("Content-Type") or "").lower():
+        html = r.text[:300_000]
+        r.close()
+        form = _drive_confirm_form(html)
+        if not form:
+            raise ValueError("دسترسی به فایل درایو ممکن نشد؛ اشتراک‌گذاری فایل را "
+                             "«هر کسی که لینک دارد» کنید و دوباره امتحان کنید.")
+        action, inputs = form
+        r = sess.get(action, params=inputs, stream=True, timeout=(15, 60))
+        if "text/html" in (r.headers.get("Content-Type") or "").lower():
+            r.close()
+            raise ValueError("گوگل‌درایو اجازهٔ دانلود نداد؛ مطمئن شوید فایل «هر کسی که لینک دارد» "
+                             "است و پوشه نیست.")
+    return r
+
+
+def _ytdlp_download(url: str, dest_dir: str):
+    """لینک‌های صفحه‌ای (یوتیوب/آپارات/...) با yt-dlp — فقط بهترین کیفیت صدا"""
+    try:
+        import yt_dlp
+    except Exception:
+        raise ValueError("پشتیبانی از این لینک روی سرور نصب نیست (yt-dlp)؛ "
+                         "لینک مستقیم فایل یا گوگل‌درایو بفرستید.")
+    opts = {
+        "format": "bestaudio/best",
+        "outtmpl": os.path.join(dest_dir, "src.%(ext)s"),
+        "noplaylist": True,
+        "playlist_items": "1",
+        "quiet": True,
+        "no_warnings": True,
+        "restrictfilenames": True,
+        "socket_timeout": 40,
+        "retries": 2,
+        "max_filesize": MAX_FILE_MB * 1024 * 1024,
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+    if isinstance(info, dict) and info.get("entries") is not None:
+        info = (info.get("entries") or [None])[0]
+    title = str((info or {}).get("title") or "").strip()
+    cands = [os.path.join(dest_dir, f) for f in os.listdir(dest_dir)
+             if os.path.isfile(os.path.join(dest_dir, f))]
+    if not cands:
+        raise ValueError("از این لینک فایلی دانلود نشد؛ ممکن است خصوصی باشد یا سایت پشتیبانی نشود.")
+    path = max(cands, key=os.path.getsize)
+    if os.path.getsize(path) > MAX_FILE_MB * 1024 * 1024:
+        raise _UrlTooLarge(f"حجم فایل بیش از سقف مجاز ({MAX_FILE_MB} مگابایت) است.")
+    return path, title
+
+
+def url_download(url: str, kind: str, dest_dir: str, status, token: str, loop=None):
+    """دانلود فایلِ لینک به dest_dir ← (مسیر فایل، نام نمایشی)"""
+    if kind == "page":
+        return _ytdlp_download(url, dest_dir)
+    if kind == "drive":
+        fid = _drive_file_id(url)
+        if not fid:
+            raise ValueError("لینک گوگل‌درایو قابل خواندن نیست.")
+        resp = _drive_open(fid)
+    else:
+        resp = requests.get(url, stream=True, timeout=(15, 60), allow_redirects=True,
+                            headers={"User-Agent": _URL_UA, "Accept": "*/*"})
+        if resp.status_code >= 400:
+            raise ValueError(f"سرور پاسخ خطا داد (کد {resp.status_code}).")
+    try:
+        total_raw = resp.headers.get("Content-Length") or ""
+        total = int(total_raw) if total_raw.isdigit() else -1
+        name = _media_name(url, resp.headers, resp.headers.get("Content-Type") or "")
+        base = safe_filename(name)
+        ext = re.sub(r"[^\w.\-]", "", os.path.splitext(name)[1])[:12] or ".bin"
+        dest = os.path.join(dest_dir, f"{token[:6]}_{base}{ext}")
+        _stream_to_file(resp, dest, status, token, total, loop)
+        return dest, name
+    finally:
+        try:
+            resp.close()
+        except Exception:
+            pass
+
+
+class _UrlReplyTarget:
+    """شیم سبکِ event برای process_file وقتی منبع، لینک اینترنتی است (پاسخ‌ها به همان چت می‌روند)"""
+
+    def __init__(self, chat_id: int, sender_id: int = 0):
+        self.chat_id = chat_id
+        self.sender_id = sender_id
+
+    async def get_sender(self):        # برای user_label ← برچسب idمحور
+        raise RuntimeError("url-source")
+
+    async def reply(self, text: str, **kw):
+        return await client.send_message(self.chat_id, text, parse_mode=kw.get("parse_mode"))
+
+
+async def _run_url_pipeline(st: dict, token: str, url: str):
+    """مسیر کامل پردازش لینک: دانلود ← صف ← تبدیل (همان گام‌های فایل تلگرامی)"""
+    global waiting_count
+    chat_id = st["chat_id"]
+    display_name = st["display_name"]
+    _label = st.get("label") or f"id={st.get('user_id')}"
+    skip_txt = f"{len(st.get('skip_ranges') or [])} بازه" if st.get("skip_ranges") else "ندارد"
+    admin_log(f"▶️ تبدیل آغاز شد (لینک): «{display_name[:50]}» | زبان: {st.get('lang_name')} | "
+              f"حذفیات: {skip_txt} | {_label}")
+
+    need_queue = queue_lock.locked()
+    queue_counted = need_queue
+    if need_queue:
+        waiting_count += 1
+        await client.send_message(
+            chat_id,
+            f"فایل شما در صف قرار گرفت (نوبت {waiting_count}).\nبه‌ترتیب پردازش می‌شود — لغو: /cancel",
+            parse_mode=None,
+        )
+
+    tmp_dir = tempfile.mkdtemp(prefix="stt_url_")
+    status = await client.send_message(chat_id, "در حال دریافت فایل از لینک...", parse_mode=None)
+    loop = asyncio.get_running_loop()
+    user_tokens.setdefault(st["user_id"], []).append(token)   # تا لغو حین دانلود هم ممکن باشد
+
+    def _dequeue():
+        nonlocal queue_counted
+        if queue_counted:
+            queue_counted = False
+            return max(0, waiting_count - 1)
+        return waiting_count
+
+    try:
+        path, dl_name = await asyncio.to_thread(
+            url_download, url, st.get("url_kind") or "file", tmp_dir, status, token, loop)
+        if dl_name:
+            display_name = dl_name
+        await safe_edit(status, "فایل دریافت شد ✅")
+        size_mb = os.path.getsize(path) / (1024 * 1024)
+        log.info(f"📥 از لینک دانلود شد: {display_name} ({size_mb:.0f}MB)")
+
+        async with queue_lock:
+            if queue_counted:
+                waiting_count = max(0, waiting_count - 1)
+                queue_counted = False
+            if token not in cancelled_tokens:
+                target = _UrlReplyTarget(chat_id, st.get("user_id") or 0)
+                await process_file(
+                    target, path, display_name, token,
+                    wants_jozve=bool(st.get("wants_jozve")),
+                    lang_code=st.get("lang_code") or "fa-IR",
+                    skip_ranges=st.get("skip_ranges"),
+                    label=_label,
+                )
+            else:
+                await client.send_message(chat_id, "این فایل قبل از شروع پردازش لغو شد.", parse_mode=None)
+
+    except _UrlCancelled:
+        waiting_count = _dequeue()
+        await safe_edit(status, "دریافت لینک لغو شد 🚫")
+        admin_log(f"🚫 دانلود لینک لغو شد | {_label}")
+    except Exception as e:
+        waiting_count = _dequeue()
+        log.exception(f"❌ خطای دانلود لینک: {e}")
+        try:
+            await safe_edit(status, f"دانلود لینک ناموفق بود:\n{str(e)[:280]}")
+        except Exception:
+            await client.send_message(chat_id, f"دانلود لینک ناموفق بود:\n{str(e)[:280]}", parse_mode=None)
+        admin_log(f"⚠️ خطای دانلود لینک\n{url[:120]}\n{str(e)[:200]}\nکاربر: {_label}")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+# =========================================================
 #  هندلرها
 # =========================================================
 @client.on(events.NewMessage(incoming=True, pattern=r"^/(start|help)$"))
@@ -733,7 +1055,9 @@ async def start_handler(event):
         "فایل صوتی یا ویدیویی خود را ارسال کنید تا متن آن استخراج شود.\n\n"
         "• ویس و پیام تصویری\n"
         "• فایل صوتی: mp3 ، m4a ، wav ، ogg ، flac\n"
-        "• ویدیو: mp4 ، mkv ، avi — تا ۲ گیگابایت\n\n"
+        "• ویدیو: mp4 ، mkv ، avi — تا ۲ گیگابایت\n"
+        "• لینک هم می‌توانید بفرستید: لینک مستقیم فایل، گوگل‌درایو یا صفحهٔ سایت‌های ویدئویی\n"
+        "  (یوتیوب/آپارات و...) — خودم دانلود می‌کنم\n\n"
         "پس از ارسال فایل، سه مرحلهٔ کوتاه را طی می‌کنیم:\n"
         "۱) زبان گفتار فایل را انتخاب می‌کنید (فارسی یا انگلیسی)\n"
         "۲) در صورت نیاز، دقیقه‌های حذفی را مشخص می‌کنید تا از تبدیل کنار گذاشته شوند\n"
@@ -981,11 +1305,94 @@ async def media_handler(event):
     )
 
 
+@client.on(events.NewMessage(incoming=True))
+async def url_handler(event):
+    """پذیرش لینک (مستقیم / گوگل‌درایو / صفحهٔ ویدئویی) ← همان تنظیم گام‌به‌گام فایل
+    فقط چت خصوصی — تا لینک‌های عادی در گروه‌ها مزاحم‌ساز نشوند"""
+    msg = event.message
+    if msg.media or not event.is_private:
+        return
+    raw = (msg.message or "").strip()
+    if not raw or raw.startswith("/"):
+        return
+    m = URL_RE.search(raw)
+    if not m:
+        return
+    # کاربر در میانهٔ ورودی متنی دیگر است (دقیقه‌های حذفی / پرامپت جزوه) — مزاحم نشو
+    up = user_pending.get(event.sender_id)
+    if up and up.get("stage") in ("skip_input", "jz_prompt"):
+        return
+
+    url = m.group(0).rstrip(".,;:!؟)]}\"'")
+    thinking = await event.reply("لینک دریافت شد؛ یک لحظه بررسی می‌کنم...", parse_mode=None)
+    try:
+        probe = await asyncio.to_thread(url_probe, url)
+    except ValueError as e:
+        await thinking.edit(str(e)[:400], parse_mode=None)
+        return
+    except Exception as e:
+        log.warning(f"🔗 بررسی لینک ناموفق: {e}")
+        await thinking.edit(
+            f"دسترسی به این لینک ممکن نشد:\n{str(e)[:250]}\n\n"
+            "اگر لینک مستقیم فایل یا گوگل‌درایو است، دوباره امتحان کنید.",
+            parse_mode=None,
+        )
+        return
+
+    kind = probe["kind"]
+    size_mb = probe["size"] / (1024 * 1024) if probe["size"] > 0 else 0
+    if size_mb > MAX_FILE_MB:
+        await thinking.edit(
+            f"حجم فایل {size_mb:.0f} مگابایت است؛ بیش از سقف تعیین‌شده ({MAX_FILE_MB} مگابایت) قابل دریافت نیست.",
+            parse_mode=None,
+        )
+        return
+
+    if probe["name"]:
+        display_name = probe["name"]
+    elif kind == "drive":
+        display_name = "فایل گوگل‌درایو"
+    elif kind == "page":
+        display_name = f"فایل از {urlparse(url).netloc or 'لینک'}"
+    else:
+        display_name = "فایل از لینک"
+
+    _prune_setups()
+    old = user_pending.pop(event.sender_id, None)
+    if old:
+        PENDING_SETUP.pop(old.get("token"), None)
+
+    token = uuid.uuid4().hex[:12]
+    _label = await user_label(event)
+    PENDING_SETUP[token] = {
+        "chat_id": event.chat_id, "msg_id": msg.id, "user_id": event.sender_id,
+        "display_name": display_name, "size_mb": size_mb,
+        "url": url, "url_kind": kind, "wants_jozve": "جزوه" in raw,
+        "ts": time.time(), "label": _label,
+        "lang_code": "", "lang_name": "", "skip_ranges": None, "stage": "lang",
+    }
+    user_pending[event.sender_id] = {"token": token, "stage": "lang"}
+    admin_log(f"🔗 لینک ({kind}): «{display_name[:50]}» | از: {_label}")
+
+    await thinking.edit(
+        "لینک شما ثبت شد؛ دو گام کوتاه تا شروع تبدیل مانده است.\n\n"
+        "گام ۱ — زبان گفتار فایل چیست؟\n"
+        "(بعد از انتخاب زبان، در صورت نیاز دقیقه‌های حذفی را مشخص می‌کنید و با تأیید نهایی، "
+        "دانلود و تبدیل آغاز می‌شود.)",
+        parse_mode=None,
+        buttons=lang_buttons(token),
+    )
+
+
 async def _run_pipeline(st: dict, token: str):
     """پس از تأیید نهایی: دریافت فایل → صف → تبدیل (همان مسیر قبلی media_handler)"""
     global waiting_count
     chat_id = st["chat_id"]
     display_name = st["display_name"]
+
+    if st.get("url"):   # منبع، لینک اینترنتی است — دانلود خودمان، نه تلگرام
+        await _run_url_pipeline(st, token, st["url"])
+        return
 
     try:
         msg = await client.get_messages(chat_id, ids=st["msg_id"])
