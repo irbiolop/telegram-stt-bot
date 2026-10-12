@@ -731,8 +731,14 @@ async def process_file(event, src_path: str, display_name: str, token: str, want
 # =========================================================
 from urllib.parse import urlparse, unquote as _unquote
 from html import unescape as _unescape
+from telethon.tl.types import MessageMediaWebPage as _MediaWebPage
 
 URL_RE = re.compile(r"https?://[^\s<>\"'،؛«»]+", re.IGNORECASE)
+# لینک بدون https:// — شروع با www. یا میزبان‌های معروف
+BARE_URL_RE = re.compile(
+    r"(?:(?:www\.)|(?:drive|docs)\.google\.com|(?:www\.)?youtube\.com|youtu\.be|(?:www\.)?aparat\.com)"
+    r"[\w./?#&=%+-]+",
+    re.IGNORECASE)
 _URL_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
            "Chrome/124.0.0.0 Safari/537.36")
 _MEDIA_EXT_RE = re.compile(
@@ -753,6 +759,11 @@ class _UrlCancelled(Exception):
 
 class _UrlTooLarge(Exception):
     """حجم فایلِ در حال دانلود از سقف مجاز گذشت"""
+
+
+def _is_media_only(media) -> bool:
+    """پیامِ فقط-لینکی پیش‌نمایش صفحه دارد (MessageMediaWebPage) — این مدیا حساب نمی‌شود"""
+    return bool(media) and not isinstance(media, _MediaWebPage)
 
 
 def _drive_file_id(url: str):
@@ -1310,12 +1321,14 @@ async def url_handler(event):
     """پذیرش لینک (مستقیم / گوگل‌درایو / صفحهٔ ویدئویی) ← همان تنظیم گام‌به‌گام فایل
     فقط چت خصوصی — تا لینک‌های عادی در گروه‌ها مزاحم‌ساز نشوند"""
     msg = event.message
-    if msg.media or not event.is_private:
+    # ⚠️ پیام حاوی لینک، مدیای MessageMediaWebPage دارد (پیش‌نمایش صفحه) — نباید آن را
+    # «فایل» حساب کنیم؛ فقط مدیای واقعی (صوت/ویدئو/عکس و...) را رد می‌کنیم
+    if _is_media_only(msg.media) or not event.is_private:
         return
     raw = (msg.message or "").strip()
     if not raw or raw.startswith("/"):
         return
-    m = URL_RE.search(raw)
+    m = URL_RE.search(raw) or BARE_URL_RE.search(raw)
     if not m:
         return
     # کاربر در میانهٔ ورودی متنی دیگر است (دقیقه‌های حذفی / پرامپت جزوه) — مزاحم نشو
@@ -1324,6 +1337,9 @@ async def url_handler(event):
         return
 
     url = m.group(0).rstrip(".,;:!؟)]}\"'")
+    if not url.lower().startswith(("http://", "https://")):
+        url = "https://" + url
+    log.info(f"🔗 پیام لینک دریافت شد: {url[:100]}")
     thinking = await event.reply("لینک دریافت شد؛ یک لحظه بررسی می‌کنم...", parse_mode=None)
     try:
         probe = await asyncio.to_thread(url_probe, url)
