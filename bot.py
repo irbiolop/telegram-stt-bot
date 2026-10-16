@@ -357,9 +357,8 @@ def register_jz_pending(text: str, title: str, chat_id: int, user_id: int,
 
 
 def jz_buttons(token: str):
-    return [[Button.inline("📚 تبدیل به جزوه", f"jz:{token}".encode())],
-            [Button.inline("✍️ جزوه با پرامپت دلخواه", f"jzp:{token}".encode())],
-            [Button.inline("🤖 ساخت با ایجنت", f"jza:{token}".encode())]]
+    """کاربر فقط یک دکمه دارد — انتخاب مسیر (ایجنت/API) خودکار و از پنل مدیریت"""
+    return [[Button.inline("📚 تبدیل به جزوه", f"jz:{token}".encode())]]
 
 
 def _clean_err(s: str) -> str:
@@ -515,13 +514,17 @@ def confirm_text(st: dict) -> str:
 #  ساخت و ارسال جزوه (هم برای دکمه، هم حالت خودکار/کپشن)
 # =========================================================
 async def run_jozve(chat_id: int, text: str, display_name: str, user_id: int = 0,
-                    custom_prompt: str = ""):
-    """جزوه را از متن آماده می‌سازد و فایل‌ها را می‌فرستد — خارج از قفل صف اجرا می‌شود.
-    custom_prompt: دستور ویژهٔ کاربر (از دکمهٔ «جزوه با پرامپت دلخواه»)"""
-    if not jozve_available():
+                    custom_prompt: str = "", _allow_agent: bool = True):
+    """جزوه را از متن می‌سازد و فایل‌ها را می‌فرستد — خارج از قفل صف اجرا می‌شود.
+    اولویت با APIهای رایگان (زنجیرهٔ jozve) است؛ در هر دو حالت خودِ مدل سند HTML
+    را مستقیم می‌سازد. اگر مدیر در پنل مدلی را برای همه پین کرده باشد، همان مدل
+    روی سرویس ایجنت به‌کار می‌رود و در خطایش APIهای رایگان جایگزین می‌شوند."""
+    pin = pinned_agent_model() if _allow_agent else None
+    agent_ready = pin is not None and gh is not None and gh.available()
+    if not agent_ready and not jozve_available():
         await client.send_message(
             chat_id,
-            "فعلاً امکان ساخت جزوه فراهم نیست؛ کلید OPENROUTER_API_KEY (یا DEEPSEEK_API_KEY) روی سرور تنظیم نشده است.",
+            "فعلاً امکان ساخت جزوه فراهم نیست؛ چند دقیقه بعد دوباره امتحان کنید.",
             parse_mode=None,
         )
         return
@@ -531,12 +534,22 @@ async def run_jozve(chat_id: int, text: str, display_name: str, user_id: int = 0
         "ساخت جزوه آغاز شد؛ بسته به طول متن ۲ تا ۱۰ دقیقه زمان می‌برد و همین پیام به‌روزرسانی می‌شود.",
         parse_mode=None,
     )
+
+    if agent_ready:
+        if await _start_agent(chat_id, text, display_name, user_id, status, pin):
+            return
+        # شروع سرویس ایجنت نشد — با APIهای رایگان ادامه می‌دهیم
+        try:
+            await safe_edit(status, "ساخت جزوه آغاز شد؛ بسته به طول متن ۲ تا ۱۰ دقیقه زمان می‌برد و همین پیام به‌روزرسانی می‌شود.")
+        except Exception:
+            pass
+
     loop = asyncio.get_running_loop()
 
     def _prog(info: dict):
         """پل پیشرفت: از ترِد پردازش به پیام تلگرام (thread-safe)"""
         try:
-            txt = jozve.render_progress(info)
+            txt = jozve.render_progress_html(info)
         except Exception:
             return
         asyncio.run_coroutine_threadsafe(safe_edit(status, txt), loop)
@@ -544,18 +557,25 @@ async def run_jozve(chat_id: int, text: str, display_name: str, user_id: int = 0
     out_dir = tempfile.mkdtemp(prefix="jozve_")
     t0 = time.time()
     try:
-        res = await asyncio.to_thread(jozve.produce_jozve, text, display_name, out_dir, _prog,
-                                      custom_prompt)
+        res = await asyncio.to_thread(
+            jozve.produce_jozve_html, text, display_name, out_dir, _prog,
+            (AGENT_CFG.get("admin_prompt") or "").strip(),
+            AGENT_CFG.get("palette") or "")
 
         if not res.get("ok"):
+            # تلاش پایانی: سرویس ایجنت — وقتی مدیر پین نکرده و APIها از کار افتاده‌اند
+            if _allow_agent and gh is not None and gh.available() and _agent_models():
+                m0 = _agent_models()[0]
+                admin_log(f"↩️ APIها ناموفق — تلاش با سرویس ایجنت ({m0['id']}) | user={user_id}")
+                if await _start_agent(chat_id, text, display_name, user_id, status, m0):
+                    return
             if res.get("quota"):
                 await client.send_message(
                     chat_id,
-                    "سهمیهٔ رایگان جزوه‌سازی برای امروز به پایان رسیده است "
-                    "(سهمیهٔ رایگان OpenRouter روی همهٔ مدل‌های رایگان مشترک است).\n"
+                    "سهمیهٔ رایگان جزوه‌سازی برای امروز به پایان رسیده است.\n"
                     "نیمه‌شب به‌وقت جهانی (UTC) دوباره برقرار می‌شود؛ متن محفوظ است — فردا دوباره دکمه را بفشارید.",
                     parse_mode=None,
-                    buttons=jz_buttons(register_jz_pending(text, display_name, chat_id, user_id, custom_prompt)),
+                    buttons=jz_buttons(register_jz_pending(text, display_name, chat_id, user_id)),
                 )
                 admin_log(f"⚠️ جزوه ناموفق (سهمیهٔ روزانه) — «{display_name[:40]}» | user={user_id}")
             else:
@@ -564,15 +584,14 @@ async def run_jozve(chat_id: int, text: str, display_name: str, user_id: int = 0
                     f"ساخت جزوه در این نوبت انجام نشد:\n{str(res.get('error'))[:200]}\n\n"
                     "متن محفوظ است — دکمه را دوباره بفشارید؛ اگر باز ساخته نشد، فایل را دوباره ارسال کنید.",
                     parse_mode=None,
-                    buttons=jz_buttons(register_jz_pending(text, display_name, chat_id, user_id, custom_prompt)),
+                    buttons=jz_buttons(register_jz_pending(text, display_name, chat_id, user_id)),
                 )
                 admin_log(f"⚠️ جزوه ناموفق — «{display_name[:40]}» | user={user_id}\n{str(res.get('error'))[:200]}")
             return
 
-        note = res.get("partial")
         cap = f"جزوه «{res['title']}»"
-        if note:
-            cap += f"\n({note})"
+        if res.get("provider"):
+            cap += f"\nمدل: {res['provider']}"
         if res.get("pdf") and os.path.exists(res["pdf"]):
             await client.send_file(chat_id, res["pdf"], force_document=True,
                                    caption=cap + " — PDF")
@@ -580,9 +599,9 @@ async def run_jozve(chat_id: int, text: str, display_name: str, user_id: int = 0
                                caption=cap + " — در هر مرورگری قابل بازکردن است")
         await safe_edit(status, "جزوه آماده و ارسال شد ✅")
         admin_log(
-            f"📚 جزوه ارسال شد{' (پرامپت دلخواه)' if (custom_prompt or '').strip() else ''}: «{str(res.get('title'))[:60]}»\n"
-            f"{res.get('sections', '?')} فصل | {res.get('words_in', 0)} به {res.get('words_out', 0)} کلمه | "
-            f"موتور: {res.get('provider', '?')} | زمان: {fmt_seconds(time.time() - t0)}\n"
+            f"📚 جزوه ارسال شد: «{str(res.get('title'))[:60]}»\n"
+            f"{res.get('words_in', 0)} به {res.get('words_out', 0)} کلمه | مدل: {res.get('provider', '?')} | "
+            f"زمان: {fmt_seconds(time.time() - t0)}\n"
             f"user={user_id}"
         )
         log.info(f"📚 جزوه ارسال شد: {res['title']}")
@@ -603,15 +622,17 @@ async def run_jozve(chat_id: int, text: str, display_name: str, user_id: int = 0
 
 
 # =========================================================
-#  جزوه با ایجنت (OpenCode روی GitHub Actions)
-#  ربات شاخهٔ موقت می‌سازد + متن را می‌گذارد + dispatch می‌کند؛
-#  Actions ایجنت را بالا می‌آورد، جزوه را می‌سازد و output.md را کامیت می‌کند؛
-#  ربات نتیجه را می‌خواند، PDF می‌سازد، می‌فرستد و شاخه را پاک می‌کند.
+#  جزوه با ایجنت — ساخت مستقیم HTML توسط مدل روی سرویس ایجنت
+#  ربات متن + استایل (پالت/پرامپت مدیر) را می‌گذارد، سرویس ایجنت سند HTML
+#  و PDF را می‌سازد؛ ربات نتیجه را می‌گیرد، می‌فرستد و شاخه را پاک می‌کند.
+# =========================================================
 # =========================================================
 AGENT_MODELS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jozve_models.json")
 AGENT_JOBS = {}   # job_id → اطلاعات job در جریان
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_state.json")
-AGENT_CFG = {"agent_model": ""}   # مدل پین‌شدهٔ ادمین برای همه؛ خالی = انتخاب آزاد کاربر
+AGENT_CFG = {"agent_model": "", "palette": "", "admin_prompt": ""}
+# agent_model: مدل پین‌شدهٔ ادمین برای همه (خالی = خودکار با سرویس‌های رایگان)
+# palette: پالت رنگی جزوه‌ها | admin_prompt: دستورالعمل ویژهٔ مدیر
 _zen_cache = {"v": False, "t": 0.0}   # کش وضعیت کلید زن روی مخزن (۱۰ دقیقه)
 
 
@@ -654,8 +675,13 @@ def _load_agent_cfg():
                 data = json.load(f)
         except Exception:
             data = None
-    if isinstance(data, dict) and "agent_model" in data:
-        AGENT_CFG["agent_model"] = str(data.get("agent_model") or "")
+    if isinstance(data, dict):
+        if "agent_model" in data:
+            AGENT_CFG["agent_model"] = str(data.get("agent_model") or "")
+        if "palette" in data:
+            AGENT_CFG["palette"] = str(data.get("palette") or "")
+        if "admin_prompt" in data:
+            AGENT_CFG["admin_prompt"] = str(data.get("admin_prompt") or "")
 
 
 def _save_agent_cfg():
@@ -725,39 +751,44 @@ def agent_model_buttons(token: str):
     return rows
 
 
-async def _launch_agent_job(event, data: dict, token: str, model: dict, note: str = ""):
-    """آغاز job ایجنت روی GitHub Actions — مشترک بین انتخاب ادمین و انتخاب کاربر"""
-    data["busy"] = True
-    try:
-        await event.answer("در حال شروع ساخت جزوه...")
-    except Exception:
-        pass
+async def _start_agent(chat_id: int, text: str, title: str, user_id: int,
+                       status, model: dict) -> bool:
+    """شروع ساخت جزوه با مدل انتخابی روی سرویس ایجنت — False یعنی شروع نشد"""
     job_id = uuid.uuid4().hex[:10]
     branch = f"agent-job-{job_id}"
-    status = await event.edit(
-        f"🤖 در حال ساخت جزوهٔ ویژه...\nمدل: {model['label']}{note}\n\n"
-        "معمولاً ۳ تا ۸ دقیقه زمان می‌برد (متن‌های خیلی طولانی تا ۱۵ دقیقه). "
-        "همین پیام به‌روز می‌شود.",
-        parse_mode=None, buttons=None,
-    )
     try:
-        await asyncio.to_thread(gh.start_agent_job, data["text"], model["id"], job_id, branch)
+        await safe_edit(
+            status,
+            f"در حال ساخت جزوه با مدل «{model['label']}»...\n\n"
+            "معمولاً ۳ تا ۸ دقیقه زمان می‌برد (متن‌های خیلی طولانی تا ۱۵ دقیقه). "
+            "همین پیام به‌روز می‌شود.",
+            parse_mode=None, buttons=None,
+        )
+    except Exception:
+        pass
+    try:
+        style = json.dumps(
+            {"style_block": jozve.style_block_text(
+                AGENT_CFG.get("palette") or "",
+                (AGENT_CFG.get("admin_prompt") or "").strip())},
+            ensure_ascii=False)
+        await asyncio.to_thread(gh.start_agent_job, text, model["id"], job_id, branch, style)
     except gh.GhError as e:
-        data["busy"] = False
-        await safe_edit(status, f"شروع ساخت ممکن نشد:\n{_clean_err(str(e))[:250]}\n\nمتن محفوظ است — دوباره امتحان کنید.")
-        admin_log(f"⚠️ آغاز ایجنت ناموفق: {str(e)[:150]} | user={data['user_id']}")
-        return
-    info = {"token": token, "chat_id": data["chat_id"], "user_id": data["user_id"],
+        admin_log(f"⚠️ آغاز ایجنت ناموفق: {str(e)[:150]} | user={user_id}")
+        return False
+    info = {"chat_id": chat_id, "user_id": user_id,
             "branch": branch, "model": model["id"], "model_label": model["label"],
-            "title": data["title"], "text": data["text"], "status": status,
+            "title": title, "text": text, "status": status,
             "t0": time.time(), "mid": False}
     AGENT_JOBS[job_id] = info
-    admin_log(f"🤖 درخواست جزوهٔ ایجنت — «{data['title'][:40]}» | مدل: {model['id']} | user={data['user_id']}")
+    admin_log(f"🤖 درخواست جزوهٔ ایجنت — «{title[:40]}» | مدل: {model['id']} | user={user_id}")
     asyncio.create_task(_run_agent_job(job_id, info))
+    return True
 
 
 async def _run_agent_job(job_id: str, info: dict):
-    """پس از dispatch: پایش خروجی ایجنت → پاکسازی مارکاپ → HTML/PDF → ارسال → پاککردن شاخه"""
+    """پس از dispatch: پایش خروجی ایجنت → ارسال PDF/HTML ساخته‌شدهٔ مدل؛
+    در خطا → تلاش خودکار با APIهای رایگان"""
     chat_id = info["chat_id"]
     status = info["status"]
 
@@ -766,13 +797,13 @@ async def _run_agent_job(job_id: str, info: dict):
             info["mid"] = True
             asyncio.ensure_future(safe_edit(
                 status,
-                "🤖 هنوز در حال ساخت جزوهٔ شما هستیم (بیش از ۴ دقیقه)...\n"
+                "هنوز در حال ساخت جزوهٔ شما هستیم (بیش از ۴ دقیقه)...\n"
                 "متن‌های طولانی معمولاً ۵ تا ۱۰ دقیقه زمان می‌برد؛ صبور باشید."))
 
     err = ""
     try:
         res = await asyncio.to_thread(
-            gh.poll_agent_output, job_id, info["branch"], 18 * 60, 20, _tick)
+            gh.poll_agent_files, job_id, info["branch"], 18 * 60, 20, _tick)
     except gh.GhError as e:
         res, err = None, str(e)
     try:
@@ -782,72 +813,82 @@ async def _run_agent_job(job_id: str, info: dict):
     AGENT_JOBS.pop(job_id, None)
 
     if res and res.get("ok"):
-        markup = ""
-        try:
-            markup = jozve._clean_fragment(res["text"])
-        except Exception:
-            markup = (res.get("text") or "").strip()
-        if len(markup.split()) < 40:
-            await safe_edit(
-                status,
-                "ساخت جزوهٔ ویژه کامل نشد؛ خروجی کوتاهی تولید شد.\n"
-                "دکمه‌های زیر متن ترنسکریپت فعال‌اند — «تبدیل به جزوه» معمولی را امتحان کنید.",
-                parse_mode=None,
-            )
-            admin_log(f"⚠️ جزوهٔ ایجنت خروجی کوتاه | مدل: {info['model']} | user={info['user_id']}")
-            return
-        m = re.search(r"^#\s+(.+)$", markup, re.M)
-        title = (m.group(1).strip() if m else "") or str(info["title"])[:80]
         out_dir = tempfile.mkdtemp(prefix="jozve_agent_")
+        pdf_path = html_path = None
         try:
-            base = re.sub(r"[^\w\u0600-\u06FF\- ]", "_", str(info["title"]))[:50].strip() or "jozve"
-            html_path = os.path.join(out_dir, base + ".html")
-            with open(html_path, "w", encoding="utf-8") as f:
-                f.write(jozve.render_html(markup, title=title, source=info["title"], mode="js"))
-            pdf_path = None
-            try:
-                from weasyprint import HTML as _WHTML  # noqa
-                _WHTML(string=jozve.render_html(markup, title=title, source=info["title"],
-                                                mode="img")).write_pdf(
-                    os.path.join(out_dir, base + ".pdf"))
-                cand = os.path.join(out_dir, base + ".pdf")
-                if os.path.exists(cand) and os.path.getsize(cand) >= 2000:
-                    pdf_path = cand
-            except Exception as pe:
-                log.warning(f"⚠️ PDF ایجنت ناموفق (فقط HTML): {pe}")
-            cap = f"جزوه «{title}» — نسخهٔ ویژه ({info['model_label']})"
+            if res.get("pdf"):
+                pdf_path = os.path.join(out_dir, "jozve.pdf")
+                with open(pdf_path, "wb") as f:
+                    f.write(res["pdf"])
+            doc = res.get("html") or ""
+            if doc:
+                base = re.sub(r"[^\w\u0600-\u06FF\- ]", "_", str(info["title"]))[:50].strip() or "jozve"
+                html_path = os.path.join(out_dir, base + ".html")
+                with open(html_path, "w", encoding="utf-8") as f:
+                    f.write(doc)
+            if not pdf_path and doc:
+                # PDF روی سرویس ایجنت ساخته نشده بود — همین‌جا تبدیل می‌شود
+                try:
+                    from weasyprint import HTML as _WHTML  # noqa
+                    cand = os.path.join(out_dir, "jozve_local.pdf")
+                    _WHTML(string=jozve._finalize_jozve_html(doc)).write_pdf(cand)
+                    if os.path.exists(cand) and os.path.getsize(cand) >= 2000:
+                        pdf_path = cand
+                except Exception as pe:
+                    log.warning(f"⚠️ PDF ایجنت محلی ناموفق (فقط HTML ارسال می‌شود): {pe}")
+            if not pdf_path and not html_path:
+                raise RuntimeError("فایل خروجی ایجنت خالی بود")
+            cap = f"جزوه «{str(info['title'])[:70]}»"
+            if info.get("model_label"):
+                cap += f" — مدل: {info['model_label']}"
             if pdf_path:
                 await client.send_file(chat_id, pdf_path, force_document=True,
                                        caption=cap + " — PDF")
-            await client.send_file(chat_id, html_path, force_document=True,
-                                   caption=cap + " — در هر مرورگری قابل بازکردن است")
+            if html_path:
+                await client.send_file(chat_id, html_path, force_document=True,
+                                       caption=cap + " — در هر مرورگری قابل بازکردن است")
             await safe_edit(status, "جزوه آماده و ارسال شد ✅")
-            admin_log(f"🤖 جزوهٔ ایجنت ارسال شد: «{title[:60]}» | مدل: {info['model']} | "
+            admin_log(f"🤖 جزوهٔ ایجنت ارسال شد: «{str(info['title'])[:60]}» | مدل: {info['model']} | "
                       f"زمان: {fmt_seconds(time.time() - info['t0'])} | user={info['user_id']}")
         except Exception as e:
             log.exception(f"❌ خطای رندر جزوهٔ ایجنت: {e}")
-            await safe_edit(status, f"آماده‌سازی فایل‌های جزوه خطا داد:\n{str(e)[:200]}",
-                            parse_mode=None)
+            await safe_edit(
+                status,
+                f"آماده‌سازی فایل‌های جزوه خطا داد:\n{str(e)[:200]}\n\nمتن محفوظ است — دوباره امتحان کنید.",
+                parse_mode=None,
+                buttons=jz_buttons(register_jz_pending(info["text"], info["title"],
+                                                       chat_id, info["user_id"])),
+            )
         finally:
             shutil.rmtree(out_dir, ignore_errors=True)
         return
 
+    # ساخت روی ایجنت ناموفق بود → تلاش با APIهای رایگان (بدون بازگشت دوباره به ایجنت)
     if res and not res.get("ok"):
         detail = _clean_err(str(res.get("error") or ""))[:300]
     elif err:
         detail = _clean_err(err)[:300]
     else:
         detail = "پاسخی از سرویس ساخت دریافت نشد (زمان انتظار تمام شد)."
-    kb = jz_buttons(register_jz_pending(info["text"], info["title"], chat_id, info["user_id"]))
+    admin_log(f"⚠️ جزوهٔ ایجنت ناموفق | مدل: {info['model']} | {detail[:180]} | user={info['user_id']}")
+    if pinned_agent_model() is None:
+        # پین فعال نبود؛ این job از فال‌بک آمده — دیگر مسیر جایگزینی نیست
+        kb = jz_buttons(register_jz_pending(info["text"], info["title"], chat_id, info["user_id"]))
+        try:
+            await status.edit(
+                "ساخت جزوه در این نوبت انجام نشد:\n" + detail +
+                "\n\nمتن محفوظ است — دوباره امتحان کنید.",
+                parse_mode=None, buttons=kb,
+            )
+        except Exception:
+            pass
+        return
+    log.info("↩️ تلاش مجدد جزوه با سرویس‌های رایگان...")
     try:
-        await status.edit(
-            "ساخت جزوهٔ ویژه ناموفق بود:\n" + detail +
-            "\n\nمتن محفوظ است — دوباره امتحان کنید یا از «تبدیل به جزوه» معمولی استفاده کنید.",
-            parse_mode=None, buttons=kb,
-        )
+        await safe_edit(status, "ساخت با سرویس اصلی انجام نشد؛ در حال تلاش با سرویس جایگزین...")
     except Exception:
         pass
-    admin_log(f"⚠️ جزوهٔ ایجنت ناموفق | مدل: {info['model']} | {detail[:180]} | user={info['user_id']}")
+    await run_jozve(chat_id, info["text"], info["title"], info["user_id"], _allow_agent=False)
 
 
 # =========================================================
@@ -1463,11 +1504,9 @@ async def start_handler(event):
         "۱) زبان گفتار فایل را انتخاب می‌کنید (فارسی یا انگلیسی)\n"
         "۲) در صورت نیاز، دقیقه‌های حذفی را مشخص می‌کنید تا از تبدیل کنار گذاشته شوند\n"
         "۳) خلاصهٔ تنظیمات را تأیید می‌کنید و تبدیل آغاز می‌شود\n\n"
-        "پس از هر تبدیل، زیر متن سه دکمه نمایش داده می‌شود:\n"
-        "• «تبدیل به جزوه» — همان متن به جزوه‌ای مرتب و تیتربندی‌شده همراه جدول، نمودار و نقشهٔ ذهنی (PDF) تبدیل می‌شود.\n"
-        "• «جزوه با پرامپت دلخواه» — دستور خودتان را می‌نویسید و جزوه طبق همان دستور ساخته می‌شود.\n"
-        "• «ساخت با ایجنت» — ایجنت هوش مصنوعی (OpenCode روی سرور GitHub) کل متن را چند بار مرور می‌کند، طرح کلی می‌چیند و "
-        "جزوه‌ای کامل، منسجم و یکپارچه می‌نویسد؛ مدل ساخت را مدیر ربات تعیین می‌کند.\n\n"
+        "پس از هر تبدیل، زیر متن یک دکمه نمایش داده می‌شود:\n"
+        "• «تبدیل به جزوه» — همان متن به جزوه‌ای کامل، منسجم و تیتربندی‌شده با جدول، کادر و بخش‌های رنگی "
+        "تبدیل می‌شود و هم PDF و هم فایل HTML برایتان فرستاده می‌شود.\n\n"
         "/status — وضعیت ربات\n"
         "/cancel — لغو تنظیم یا پردازش\n"
         "/jozve — ساخت خودکار جزوه پس از هر تبدیل (روشن/خاموش)\n"
@@ -1620,20 +1659,27 @@ ADMIN_STAGE_TTL = 900
 
 def _admin_panel_text() -> str:
     pin = pinned_agent_model()
-    model_txt = pin["label"] if pin else "انتخاب آزاد توسط کاربر"
-    zen = "✅ ثبت شده" if zen_key_set() else "❌ ثبت نشده — مدل‌های زن غیرفعال‌اند"
+    model_txt = pin["label"] if pin else "خودکار — سرویس‌های رایگان"
+    pal = jozve.palette_info(AGENT_CFG.get("palette") or "")
+    ap = (AGENT_CFG.get("admin_prompt") or "").strip()
+    pr_txt = (f"ثبت شده ({len(ap)} حرف)" if ap else "پیش‌فرض")
+    zen = "✅ ثبت شده" if zen_key_set() else "❌ ثبت نشده — مدل‌های رایگان ایجنت غیرفعال‌اند"
     return ("⚙️ پنل مدیریت\n\n"
-            f"🤖 مدل ایجنت (برای همه): {model_txt}\n"
-            f"🔑 کلید OpenCode Zen: {zen}\n"
+            f"🤖 مدل جزوه: {model_txt}\n"
+            f"🎨 پالت رنگی جزوه: {pal['label']}\n"
+            f"📝 پرامپت جزوه: {pr_txt}\n"
+            f"🔑 کلید ایجنت: {zen}\n"
             f"🚫 بن‌شده‌ها: {len(banned_ids)} نفر\n\n"
-            "مدل «زن» = ظرفیت رایگان سرویس OpenCode؛ مدل پین‌شده روی دکمهٔ "
-            "«ساخت با ایجنت» همهٔ کاربران اعمال می‌شود.")
+            "در حالت «خودکار» سرویس‌های رایگان اولویت دارند؛ اگر مدلی پین کنید، "
+            "همهٔ جزوه‌ها با همان مدل ساخته می‌شوند.")
 
 
 def _admin_panel_buttons():
     return [
-        [Button.inline("🤖 انتخاب مدل ایجنت", b"adm:models")],
-        [Button.inline("🔑 کلید OpenCode Zen", b"adm:zenkey"),
+        [Button.inline("🤖 انتخاب مدل جزوه", b"adm:models")],
+        [Button.inline("🎨 پالت رنگی", b"adm:palette"),
+         Button.inline("📝 پرامپت جزوه", b"adm:prompt")],
+        [Button.inline("🔑 کلید ایجنت", b"adm:zenkey"),
          Button.inline("📊 وضعیت", b"adm:status")],
         [Button.inline("🚫 بن کردن کاربر", b"adm:ban"),
          Button.inline("🔓 رفع بن", b"adm:unban")],
@@ -1643,7 +1689,7 @@ def _admin_panel_buttons():
 
 
 def _admin_models_buttons():
-    rows = [[Button.inline("🎲 انتخاب آزاد توسط کاربر", b"adm:mfree")]]
+    rows = [[Button.inline("🎲 خودکار (سرویس‌های رایگان)", b"adm:mfree")]]
     models = _agent_models()
     pin = (AGENT_CFG.get("agent_model") or "")
     for i, m in enumerate(models):
@@ -1696,14 +1742,58 @@ async def admin_panel_handler(event):
     if action == "adm:models":
         await event.answer()
         await event.edit(
-            "🤖 کدام مدل برای «ساخت با ایجنت» همهٔ کاربران استفاده شود؟\n"
-            "(مدل‌های «زن» = ظرفیت رایگان سرویس OpenCode)",
+            "🤖 کدام مدل برای «تبدیل به جزوهٔ» همهٔ کاربران استفاده شود؟\n"
+            "(حالت خودکار = اولویت با سرویس‌های رایگان؛ پین‌کردن مدل = ساخت همهٔ جزوه‌ها با همان مدل روی سرویس ایجنت)",
             parse_mode=None, buttons=_admin_models_buttons())
+        return
+    if action == "adm:palette":
+        rows = []
+        cur = (AGENT_CFG.get("palette") or jozve.DEFAULT_PALETTE)
+        for pid, p in jozve.PALETTES.items():
+            mark = "✅ " if pid == cur else ""
+            rows.append([Button.inline(f"{mark}🎨 {p['label']}",
+                                       f"adm:pal:{pid}".encode())])
+        rows.append([Button.inline("🔙 بازگشت", b"adm:panel")])
+        await event.answer()
+        await event.edit(
+            "🎨 پالت رنگی جزوه‌ها — روی ظاهر HTML و PDF همهٔ جزوه‌ها اعمال می‌شود.",
+            parse_mode=None, buttons=rows)
+        return
+    if action.startswith("adm:pal:"):
+        pid = action.split(":", 2)[2]
+        if pid not in jozve.PALETTES:
+            await event.answer("پالت نامعتبر است.", alert=True)
+            return
+        AGENT_CFG["palette"] = pid
+        _save_agent_cfg()
+        await event.answer(f"پالت ثبت شد: {jozve.PALETTES[pid]['label']}", alert=True)
+        await event.edit(_admin_panel_text(), parse_mode=None,
+                         buttons=_admin_panel_buttons())
+        return
+    if action == "adm:prompt":
+        cur = (AGENT_CFG.get("admin_prompt") or "").strip()
+        ADMIN_STAGE[event.sender_id] = {"stage": "admpr", "ts": time.time()}
+        await event.answer()
+        await client.send_message(
+            event.chat_id,
+            "📝 دستورالعمل ویژهٔ شما برای ساخت جزوه را در یک پیام بفرستید.\n"
+            "این دستور به پرامپت همهٔ جزوه‌ها (هم سرویس رایگان، هم ایجنت) افزوده می‌شود.\n"
+            "نمونه: «جزوه پرسش‌وپاسخ باشد» یا «تعریف‌ها و فرمول‌ها را برجسته کن».\n\n"
+            + (f"پرامپت فعلی:\n{cur[:400]}" if cur else "پرامپت فعلی: پیش‌فرض") +
+            "\n\nبرای بازگشت به پیش‌فرض: «پیش‌فرض» را بفرستید\nلغو: «لغو» را بفرستید",
+            parse_mode=None)
+        return
+    if action == "adm:promptreset":
+        AGENT_CFG["admin_prompt"] = ""
+        _save_agent_cfg()
+        await event.answer("پرامپت جزوه به پیش‌فرض برگشت.", alert=True)
+        await event.edit(_admin_panel_text(), parse_mode=None,
+                         buttons=_admin_panel_buttons())
         return
     if action == "adm:mfree":
         AGENT_CFG["agent_model"] = ""
         _save_agent_cfg()
-        await event.answer("انتخاب آزاد توسط کاربر فعال شد", alert=True)
+        await event.answer("حالت خودکار فعال شد — اولویت با سرویس‌های رایگان", alert=True)
         await event.edit(_admin_panel_text(), parse_mode=None,
                          buttons=_admin_panel_buttons())
         return
@@ -1742,10 +1832,10 @@ async def admin_panel_handler(event):
         await event.answer()
         await client.send_message(
             event.chat_id,
-            "🔑 کلید API سرویس OpenCode (Zen) را بفرستید.\n"
+            "🔑 کلید API سرویس ایجنت را بفرستید.\n"
             "کلید رایگان از opencode.ai قابل ساخت است.\n"
-            "کلید به‌صورت secret روی مخزن GitHub ثبت می‌شود و مدل‌های رایگان زن "
-            "(GLM، DeepSeek، Kimi و...) در «ساخت با ایجنت» فعال می‌شوند.\n\n"
+            "کلید به‌صورت secret ثبت می‌شود و مدل‌های رایگان ایجنت "
+            "(GLM، DeepSeek، Kimi و...) برای «تبدیل به جزوه» فعال می‌شوند.\n\n"
             "لغو: «لغو» را بفرستید",
             parse_mode=None)
         return
@@ -1767,10 +1857,12 @@ async def admin_panel_handler(event):
                 runs = await asyncio.to_thread(gh.recent_runs, 3)
             except Exception:
                 runs = []
-        lines = ["📊 وضعیت ایجنت", "",
-                 f"GitHub: {'✅ متصل — ' + gh.GH_REPO if (gh is not None and gh.available()) else '❌ تنظیم نشده'}",
-                 f"🔑 کلید زن: {'✅ ثبت شده' if zen_key_set() else '❌ ثبت نشده'}",
-                 f"🎯 مدل فعال: {(pinned_agent_model() or {}).get('label') or 'انتخاب آزاد'}",
+        lines = ["📊 وضعیت", "",
+                 f"سرویس ایجنت: {'✅ متصل' if (gh is not None and gh.available()) else '❌ تنظیم نشده'}",
+                 f"🔑 کلید ایجنت: {'✅ ثبت شده' if zen_key_set() else '❌ ثبت نشده'}",
+                 f"🎯 مدل فعال: {(pinned_agent_model() or {}).get('label') or 'خودکار (سرویس‌های رایگان)'}",
+                 f"🎨 پالت: {jozve.palette_info(AGENT_CFG.get('palette') or '')['label']}",
+                 f"📝 پرامپت: {'ثبت شده' if (AGENT_CFG.get('admin_prompt') or '').strip() else 'پیش‌فرض'}",
                  f"🤖 مدل‌های در دسترس: {len(_agent_models())}",
                  f"🚫 بن‌شده‌ها: {len(banned_ids)} نفر", ""]
         if runs:
@@ -1840,11 +1932,33 @@ async def admin_stage_handler(event):
                 await event.reply(f"کاربر {target} در فهرست بن نیست.", parse_mode=None)
         event.stop_propagation()
         return
+    if stage == "admpr":
+        ADMIN_STAGE.pop(event.sender_id, None)
+        ap = txt.strip()
+        if ap in ("پیش‌فرض", "reset", "Reset"):
+            AGENT_CFG["admin_prompt"] = ""
+            _save_agent_cfg()
+            await event.reply("✅ پرامپت جزوه به حالت پیش‌فرض برگشت.", parse_mode=None)
+            admin_log("📝 پرامپت جزوه به پیش‌فرض برگشت (ادمین)")
+            event.stop_propagation()
+            return
+        if len(ap) < 5:
+            await event.reply("متن کوتاه است؛ دوباره بفرستید یا «لغو» را بنویسید.",
+                              parse_mode=None)
+            event.stop_propagation()
+            return
+        AGENT_CFG["admin_prompt"] = ap[:3000]
+        _save_agent_cfg()
+        await event.reply(f"✅ پرامپت جزوه ثبت شد ({len(ap)} حرف) و از این پس روی همهٔ جزوه‌ها اعمال می‌شود.",
+                          parse_mode=None)
+        admin_log(f"📝 پرامپت جزوه توسط ادمین به‌روز شد ({len(ap)} حرف)")
+        event.stop_propagation()
+        return
     if stage == "zenkey":
         ADMIN_STAGE.pop(event.sender_id, None)
         key = txt.strip()
         if len(key) < 10 or (" " in key or "\n" in key):
-            await event.reply("کلید نامعتبر است؛ دوباره از «🔑 کلید OpenCode Zen» شروع کنید.",
+            await event.reply("کلید نامعتبر است؛ دوباره از «🔑 کلید ایجنت» شروع کنید.",
                               parse_mode=None)
             event.stop_propagation()
             return
@@ -1856,10 +1970,10 @@ async def admin_stage_handler(event):
             event.stop_propagation()
             return
         zen_key_set(force=True)
-        await event.reply("✅ کلید OpenCode Zen روی مخزن ثبت شد.\n"
-                          "از این پس مدل‌های رایگان زن (GLM، DeepSeek، Kimi و...) "
-                          "در «ساخت با ایجنت» در دسترس‌اند.", parse_mode=None)
-        admin_log("🔑 کلید OpenCode Zen توسط ادمین ثبت شد")
+        await event.reply("✅ کلید ایجنت ثبت شد.\n"
+                          "از این پس مدل‌های رایگان ایجنت (GLM، DeepSeek، Kimi و...) "
+                          "در پنل قابل انتخاب و برای «تبدیل به جزوه» قابل‌استفاده‌اند.", parse_mode=None)
+        admin_log("🔑 کلید ایجنت توسط ادمین ثبت شد")
         event.stop_propagation()
 
 
@@ -1895,31 +2009,10 @@ async def jz_button_handler(event):
 
 @client.on(events.CallbackQuery(pattern=r"^jzp:"))
 async def jz_prompt_start_handler(event):
-    """دکمهٔ «جزوه با پرامپت دلخواه» — انتظار برای دستور کاربر"""
-    token = (event.data or b"").decode("utf-8", "ignore").split(":", 1)[-1]
-    data = PENDING_JZ.get(token)
-    if not data:
-        await event.answer(
-            "این متن دیگر در حافظه موجود نیست؛ فایل را دوباره ارسال و دکمه را بفشارید.",
-            alert=True,
-        )
-        return
-    if data.get("busy"):
-        await event.answer("جزوه در حال ساخت است؛ لطفاً شکیبا باشید.", alert=True)
-        return
-    user_pending[event.sender_id] = {"token": token, "stage": "jz_prompt"}
-    await event.answer()
-    await event.edit(
-        "دستور دلخواه خود را در یک پیام بنویسید و بفرستید.\n\n"
-        "چند نمونه:\n"
-        "• «فقط نکته‌های امتحانی و فرمول‌ها را استخراج کن»\n"
-        "• «جزوه را به‌صورت پرسش و پاسخ بچین»\n"
-        "• «خلاصه‌ای برای مرور شب امتحان بساز»\n\n"
-        "دستور شما به قوانین اصلی جزوه (فارسی، پوشش کامل، جدول و نمودار) افزوده می‌شود؛ "
-        "پس از ثبت، خلاصهٔ آن را برای تأیید نشان می‌دهم.",
-        parse_mode=None,
-        buttons=[[Button.inline("✖️ انصراف", f"jzx:{token}".encode())]],
-    )
+    """دکمهٔ قدیمی «پرامپت دلخواه» — دیگر لازم نیست؛ تنظیم جزوه از پنل مدیریت است"""
+    await event.answer(
+        "برای جزوه فقط دکمهٔ «تبدیل به جزوه» را بزنید؛ تنظیمات جزوه از پنل مدیریت انجام می‌شود.",
+        alert=True)
 
 
 @client.on(events.CallbackQuery(pattern=r"^jzx:"))
@@ -1975,7 +2068,7 @@ async def jz_prompt_go_handler(event):
 
 @client.on(events.CallbackQuery(pattern=r"^jza:"))
 async def jz_agent_start_handler(event):
-    """دکمهٔ «جزوه با ایجنت رایگان» — نمایش لیست مدل‌های رایگان برای انتخاب"""
+    """دکمهٔ قدیمی «ساخت با ایجنت» — حالا همان جریان واحد «تبدیل به جزوه» است"""
     token = (event.data or b"").decode("utf-8", "ignore").split(":", 1)[-1]
     if event.sender_id in banned_ids:
         await event.answer("شما در لیست استفاده‌کنندگان این ربات نیستید.", alert=True)
@@ -1990,30 +2083,15 @@ async def jz_agent_start_handler(event):
     if data.get("busy"):
         await event.answer("جزوه در حال ساخت است؛ لطفاً شکیبا باشید.", alert=True)
         return
-    if gh is None or not gh.available():
-        await event.answer("این قابلیت فعلاً در دسترس نیست؛ بعداً دوباره امتحان کنید.", alert=True)
-        return
-    models = _agent_models()
-    if not models:
-        await event.answer("فعلاً مدلی در دسترس نیست؛ بعداً دوباره امتحان کنید.", alert=True)
-        return
-    if len((data.get("text") or "").split()) < 60:
-        await event.answer("متن برای ساخت جزوه بسیار کوتاه است.", alert=True)
-        return
-    pin = pinned_agent_model()
-    if pin:
-        # مدل از پیش توسط مدیر برای همه تعیین شده — مستقیم شروع می‌شود
-        await _launch_agent_job(event, data, token, pin, " — انتخاب مدیر")
-        return
-    await event.answer()
-    await event.edit(
-        "🤖 «ساخت با ایجنت» با کیفیت بالاتر انجام می‌شود: ایجنت OpenCode کل متن را چند بار مرور می‌کند، "
-        "طرح کلی می‌چیند و جزوه‌ای کامل، منسجم و یکپارچه می‌نویسد.\n\n"
-        "با کدام مدل ساخته شود؟\n"
-        "(برای متن‌های طولانی، مدل با کانتکست بزرگ‌تر پیشنهاد می‌شود)",
-        parse_mode=None,
-        buttons=agent_model_buttons(token),
-    )
+    data["busy"] = True
+    try:
+        await event.answer("در حال انجام است؛ چند دقیقه زمان می‌برد.")
+    except Exception:
+        pass
+    try:
+        await run_jozve(data["chat_id"], data["text"], data["title"], data["user_id"])
+    finally:
+        data["busy"] = False
 
 
 @client.on(events.CallbackQuery(pattern=r"^cxjz:"))
@@ -2028,13 +2106,8 @@ async def jz_agent_cancel_handler(event):
 
 @client.on(events.CallbackQuery(pattern=r"^jzm:"))
 async def jz_model_pick_handler(event):
-    """انتخاب مدل ← آغاز job ایجنت روی GitHub Actions"""
-    try:
-        _, token, idx_s = (event.data or b"").decode("utf-8", "ignore").split(":", 2)
-        idx = int(idx_s)
-    except ValueError:
-        await event.answer("دادهٔ دکمه نامعتبر است.", alert=True)
-        return
+    """دکمهٔ قدیمی انتخاب مدل — حالا همان جریان واحد است (مدل از پنل مدیریت تعیین می‌شود)"""
+    token = (event.data or b"").decode("utf-8", "ignore").split(":", 1)[-1]
     if event.sender_id in banned_ids:
         await event.answer("شما در لیست استفاده‌کنندگان این ربات نیستید.", alert=True)
         return
@@ -2045,15 +2118,15 @@ async def jz_model_pick_handler(event):
     if data.get("busy"):
         await event.answer("جزوه در حال ساخت است؛ لطفاً شکیبا باشید.", alert=True)
         return
-    models = _agent_models()
-    if not (0 <= idx < len(models)):
-        await event.answer("این مدل دیگر موجود نیست؛ دوباره انتخاب کنید.", alert=True)
-        return
-    model = models[idx]
-    if gh is None or not gh.available():
-        await event.answer("این قابلیت فعلاً در دسترس نیست.", alert=True)
-        return
-    await _launch_agent_job(event, data, token, model)
+    data["busy"] = True
+    try:
+        await event.answer("در حال انجام است؛ چند دقیقه زمان می‌برد.")
+    except Exception:
+        pass
+    try:
+        await run_jozve(data["chat_id"], data["text"], data["title"], data["user_id"])
+    finally:
+        data["busy"] = False
 
 
 @client.on(events.NewMessage(incoming=True))
