@@ -1,0 +1,120 @@
+name: jozve-agent
+
+# 🤖 ایجنت جزوه — با repository_dispatch از ربات بالا می‌آید، جزوه را می‌سازد
+# و output.md را روی همان شاخهٔ موقت کامیت می‌کند؛ سپس ماشین خاموش می‌شود.
+on:
+  repository_dispatch:
+    types: [jozve-job]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: jozve-${{ github.event.client_payload.job_id }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout job branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.client_payload.branch }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
+
+      - name: Install opencode
+        run: |
+          set -euo pipefail
+          npm install -g opencode-ai@latest --silent
+          opencode --version
+
+      - name: Write opencode config (providers with available keys)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          prov = {}
+          def add(pid, name, base, envk, models, headers=None):
+              if not os.getenv(envk):
+                  return
+              p = {"npm": "@ai-sdk/openai-compatible", "name": name,
+                   "options": {"baseURL": base, "apiKey": "{env:%s}" % envk},
+                   "models": models}
+              if headers:
+                  p["headers"] = headers
+              prov[pid] = p
+          add("gemini-free", "Gemini",
+              "https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", {
+                  "flash": {"modelID": os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
+                            "name": "Gemini Flash",
+                            "limit": {"context": 1000000, "output": 65536}},
+              })
+          add("groq-free", "Groq",
+              "https://api.groq.com/openai/v1", "GROQ_API_KEY", {
+                  "gpt-oss-120b": {"modelID": "gpt-oss-120b", "name": "GPT-OSS 120B",
+                                   "limit": {"context": 131072, "output": 32768}},
+                  "llama70b": {"modelID": "llama-3.3-70b-versatile", "name": "Llama 3.3 70B",
+                               "limit": {"context": 131072, "output": 32768}},
+              })
+          add("openrouter-free", "OpenRouter",
+              "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", {
+                  "nemotron-ultra": {"modelID": "nvidia/nemotron-3-ultra-550b-a55b:free",
+                                     "name": "Nemotron 3 Ultra 550B"},
+              },
+              headers={"HTTP-Referer": "https://github.com/irbiolop/telegram-stt-bot",
+                       "X-Title": "telegram-stt-bot-agent"})
+          cfg = {"$schema": "https://opencode.ai/config.json",
+                 "autoupdate": False,
+                 "permission": {"edit": "allow", "bash": "allow", "webfetch": "allow"},
+                 "provider": prov}
+          with open("opencode.json", "w", encoding="utf-8") as f:
+              json.dump(cfg, f, ensure_ascii=False, indent=2)
+          print("providers:", ", ".join(prov) or "(none!)")
+          PY
+
+      - name: Run opencode agent
+        env:
+          JOB: ${{ github.event.client_payload.job_id }}
+          MODEL: ${{ github.event.client_payload.model }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+          echo "job=$JOB model=$MODEL"
+          TASK=$(printf '%s' "وظیفهٔ تو ساخت یک جزوهٔ درسی کامل است.
+          ۱) فایل jozve_prompt.md را کامل بخوان؛ این سند، دستورالعمل رسمی ساخت جزوه است و باید دقیقاً و بدون کوتاهی اجرا شود.
+          ۲) متن خام رونویسی در agent-jobs/$JOB/input.txt قرار دارد.
+          ۳) کل متن را چند بار مرور کن، یک طرح کلی (فهرست فصل‌ها) بساز و جزوهٔ کامل و یکپارچه را طبق jozve_prompt.md بنویس.
+          ۴) خروجی نهایی را در agent-jobs/$JOB/output.md ذخیره کن — فقط این یک فایل؛ هیچ فایل دیگری نساز.
+          ۵) زبان جزوه حتماً فارسی روان است. هیچ بخشی از متن ورودی نباید بدون پوشش بماند و خروجی نباید کوتاه‌تر از حد لازم باشد.")
+          opencode run --auto -m "$MODEL" --title "jozve-$JOB" "$TASK"
+
+      - name: Commit agent output
+        if: success()
+        run: |
+          set -euo pipefail
+          git config user.name "jozve-agent"
+          git config user.email "actions@users.noreply.github.com"
+          git add "agent-jobs/${{ github.event.client_payload.job_id }}" || true
+          git commit -m "jozve output: ${{ github.event.client_payload.job_id }}"
+          git push origin "HEAD:${{ github.event.client_payload.branch }}"
+
+      - name: Commit error report
+        if: failure()
+        run: |
+          set -euo pipefail
+          git config user.name "jozve-agent"
+          git config user.email "actions@users.noreply.github.com"
+          echo "ساخت جزوه روی ایجنت ناموفق بود؛ جزئیات در لاگ اجرای Actions: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            > "agent-jobs/${{ github.event.client_payload.job_id }}/error.txt"
+          git add "agent-jobs/${{ github.event.client_payload.job_id }}" || true
+          git commit -m "jozve error: ${{ github.event.client_payload.job_id }}" || echo "nothing to commit"
+          git push origin "HEAD:${{ github.event.client_payload.branch }}" || true
