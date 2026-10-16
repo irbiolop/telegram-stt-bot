@@ -359,7 +359,7 @@ def register_jz_pending(text: str, title: str, chat_id: int, user_id: int,
 def jz_buttons(token: str):
     return [[Button.inline("📚 تبدیل به جزوه", f"jz:{token}".encode())],
             [Button.inline("✍️ جزوه با پرامپت دلخواه", f"jzp:{token}".encode())],
-            [Button.inline("🤖 جزوهٔ ویژه رایگان", f"jza:{token}".encode())]]
+            [Button.inline("🤖 ساخت با ایجنت", f"jza:{token}".encode())]]
 
 
 def _clean_err(s: str) -> str:
@@ -610,14 +610,81 @@ async def run_jozve(chat_id: int, text: str, display_name: str, user_id: int = 0
 # =========================================================
 AGENT_MODELS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jozve_models.json")
 AGENT_JOBS = {}   # job_id → اطلاعات job در جریان
+STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_state.json")
+AGENT_CFG = {"agent_model": ""}   # مدل پین‌شدهٔ ادمین برای همه؛ خالی = انتخاب آزاد کاربر
+_zen_cache = {"v": False, "t": 0.0}   # کش وضعیت کلید زن روی مخزن (۱۰ دقیقه)
 
 
 def agent_available() -> bool:
     return gh is not None and gh.available() and bool(_agent_models())
 
 
+def zen_key_set(force: bool = False) -> bool:
+    """آیا کلید OpenCode (Zen) روی مخزن GitHub ثبت شده؟ (بررسی با کش ۱۰ دقیقه‌ای)"""
+    if gh is None or not gh.available():
+        return False
+    now = time.time()
+    if not force and _zen_cache["t"] and now - _zen_cache["t"] < 600:
+        return bool(_zen_cache["v"])
+    v = False
+    try:
+        v = "OPENCODE_API_KEY" in (gh.list_repo_secrets() or [])
+    except Exception as e:
+        log.warning(f"⚠️ چک secrets مخزن ناموفق: {str(e)[:100]}")
+        v = bool(_zen_cache["v"])
+    _zen_cache.update(v=v, t=now)
+    return v
+
+
+def _load_agent_cfg():
+    """تنظیمات ایجنت: gist منبع اصلی است؛ در نبودش فایل محلی."""
+    data = None
+    if gh is not None and gh.available():
+        gid = BANNED_GIST_ID or _read_local_gist_id()
+        if gid:
+            raw = gh.gist_read(gid, gh.CONFIG_FILENAME)
+            if raw:
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    data = None
+    if data is None:
+        try:
+            with open(STATE_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = None
+    if isinstance(data, dict) and "agent_model" in data:
+        AGENT_CFG["agent_model"] = str(data.get("agent_model") or "")
+
+
+def _save_agent_cfg():
+    data = json.dumps(AGENT_CFG, ensure_ascii=False)
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            f.write(data)
+    except Exception:
+        pass
+    if gh is None or not gh.available():
+        return
+    gid = BANNED_GIST_ID or _read_local_gist_id()
+    if gid:
+        gh.gist_write(gid, data, gh.CONFIG_FILENAME)
+
+
+def pinned_agent_model():
+    """مدل پین‌شدهٔ ادمین برای همهٔ کاربران — اگر هنوز معتبر باشد"""
+    mid = (AGENT_CFG.get("agent_model") or "").strip()
+    if not mid:
+        return None
+    for m in _agent_models():
+        if m.get("id") == mid:
+            return m
+    return None
+
+
 def _agent_models() -> list:
-    """مدل‌های رایگانِ قابل نمایش — فقط تامین‌کننده‌هایی که کلیدشان روی سرور تنظیم است"""
+    """مدل‌های رایگانِ قابل نمایش — فقط تامین‌کننده‌هایی که کلیدشان در دسترس است"""
     try:
         with open(AGENT_MODELS_FILE, encoding="utf-8") as f:
             cfg = json.load(f)
@@ -629,11 +696,19 @@ def _agent_models() -> list:
         p = provs.get(m.get("provider") or "")
         if not p:
             continue
-        env_name = p.get("env") or ""
-        if env_name and not os.getenv(env_name):
-            continue
+        if p.get("native"):
+            # سرویس رسمی OpenCode Zen — کلیدش secret مخزن است نه env سرور
+            if not zen_key_set():
+                continue
+        else:
+            env_name = p.get("env") or ""
+            if env_name and not os.getenv(env_name):
+                continue
         out.append(m)
     return out
+
+
+_load_agent_cfg()   # تنظیمات ایجنت (مدل پین‌شدهٔ ادمین) از gist/فایل محلی
 
 
 def agent_model_buttons(token: str):
@@ -648,6 +723,37 @@ def agent_model_buttons(token: str):
         rows.append(row)
     rows.append([Button.inline("✖️ انصراف", f"cxjz:{token}".encode())])
     return rows
+
+
+async def _launch_agent_job(event, data: dict, token: str, model: dict, note: str = ""):
+    """آغاز job ایجنت روی GitHub Actions — مشترک بین انتخاب ادمین و انتخاب کاربر"""
+    data["busy"] = True
+    try:
+        await event.answer("در حال شروع ساخت جزوه...")
+    except Exception:
+        pass
+    job_id = uuid.uuid4().hex[:10]
+    branch = f"agent-job-{job_id}"
+    status = await event.edit(
+        f"🤖 در حال ساخت جزوهٔ ویژه...\nمدل: {model['label']}{note}\n\n"
+        "معمولاً ۳ تا ۸ دقیقه زمان می‌برد (متن‌های خیلی طولانی تا ۱۵ دقیقه). "
+        "همین پیام به‌روز می‌شود.",
+        parse_mode=None, buttons=None,
+    )
+    try:
+        await asyncio.to_thread(gh.start_agent_job, data["text"], model["id"], job_id, branch)
+    except gh.GhError as e:
+        data["busy"] = False
+        await safe_edit(status, f"شروع ساخت ممکن نشد:\n{_clean_err(str(e))[:250]}\n\nمتن محفوظ است — دوباره امتحان کنید.")
+        admin_log(f"⚠️ آغاز ایجنت ناموفق: {str(e)[:150]} | user={data['user_id']}")
+        return
+    info = {"token": token, "chat_id": data["chat_id"], "user_id": data["user_id"],
+            "branch": branch, "model": model["id"], "model_label": model["label"],
+            "title": data["title"], "text": data["text"], "status": status,
+            "t0": time.time(), "mid": False}
+    AGENT_JOBS[job_id] = info
+    admin_log(f"🤖 درخواست جزوهٔ ایجنت — «{data['title'][:40]}» | مدل: {model['id']} | user={data['user_id']}")
+    asyncio.create_task(_run_agent_job(job_id, info))
 
 
 async def _run_agent_job(job_id: str, info: dict):
@@ -1360,11 +1466,13 @@ async def start_handler(event):
         "پس از هر تبدیل، زیر متن سه دکمه نمایش داده می‌شود:\n"
         "• «تبدیل به جزوه» — همان متن به جزوه‌ای مرتب و تیتربندی‌شده همراه جدول، نمودار و نقشهٔ ذهنی (PDF) تبدیل می‌شود.\n"
         "• «جزوه با پرامپت دلخواه» — دستور خودتان را می‌نویسید و جزوه طبق همان دستور ساخته می‌شود.\n"
-        "• «جزوهٔ ویژه رایگان» — هوش مصنوعی کل متن را چند بار مرور می‌کند، طرح کلی می‌چیند و "
-        "جزوه‌ای کامل، منسجم و یکپارچه می‌نویسد؛ مدل ساخت را خودتان انتخاب می‌کنید.\n\n"
+        "• «ساخت با ایجنت» — ایجنت هوش مصنوعی (OpenCode روی سرور GitHub) کل متن را چند بار مرور می‌کند، طرح کلی می‌چیند و "
+        "جزوه‌ای کامل، منسجم و یکپارچه می‌نویسد؛ مدل ساخت را مدیر ربات تعیین می‌کند.\n\n"
         "/status — وضعیت ربات\n"
         "/cancel — لغو تنظیم یا پردازش\n"
-        "/jozve — ساخت خودکار جزوه پس از هر تبدیل (روشن/خاموش)"
+        "/jozve — ساخت خودکار جزوه پس از هر تبدیل (روشن/خاموش)\n"
+        "/id — نمایش آیدی عددی شما\n"
+        "/admin — پنل مدیریت (فقط مدیر ربات)"
     )
     is_new = event.sender_id not in known_users
     known_users.add(event.sender_id)
@@ -1501,6 +1609,258 @@ async def banlist_handler(event):
     ids = "، ".join(str(x) for x in sorted(banned_ids)[:100])
     more = "\n…" if len(banned_ids) > 100 else ""
     await event.reply(f"🚫 کاربران بن‌شده ({len(banned_ids)} نفر):\n{ids}{more}\n\nحذف از بن: /unban <آیدی>")
+
+
+# =========================================================
+#  پنل مدیریت (/admin) — مدل ایجنت برای همه + بن کاربران + کلید زن
+# =========================================================
+ADMIN_STAGE = {}          # admin_id → {"stage", "ts"} — ورودی مرحله‌ای ادمین
+ADMIN_STAGE_TTL = 900
+
+
+def _admin_panel_text() -> str:
+    pin = pinned_agent_model()
+    model_txt = pin["label"] if pin else "انتخاب آزاد توسط کاربر"
+    zen = "✅ ثبت شده" if zen_key_set() else "❌ ثبت نشده — مدل‌های زن غیرفعال‌اند"
+    return ("⚙️ پنل مدیریت\n\n"
+            f"🤖 مدل ایجنت (برای همه): {model_txt}\n"
+            f"🔑 کلید OpenCode Zen: {zen}\n"
+            f"🚫 بن‌شده‌ها: {len(banned_ids)} نفر\n\n"
+            "مدل «زن» = ظرفیت رایگان سرویس OpenCode؛ مدل پین‌شده روی دکمهٔ "
+            "«ساخت با ایجنت» همهٔ کاربران اعمال می‌شود.")
+
+
+def _admin_panel_buttons():
+    return [
+        [Button.inline("🤖 انتخاب مدل ایجنت", b"adm:models")],
+        [Button.inline("🔑 کلید OpenCode Zen", b"adm:zenkey"),
+         Button.inline("📊 وضعیت", b"adm:status")],
+        [Button.inline("🚫 بن کردن کاربر", b"adm:ban"),
+         Button.inline("🔓 رفع بن", b"adm:unban")],
+        [Button.inline("📋 لیست بن‌شده‌ها", b"adm:banlist"),
+         Button.inline("✖️ بستن", b"adm:close")],
+    ]
+
+
+def _admin_models_buttons():
+    rows = [[Button.inline("🎲 انتخاب آزاد توسط کاربر", b"adm:mfree")]]
+    models = _agent_models()
+    pin = (AGENT_CFG.get("agent_model") or "")
+    for i, m in enumerate(models):
+        mark = "✅ " if m.get("id") == pin else ""
+        rows.append([Button.inline(f"{mark}⚡ {m['label'][:44]}",
+                                   f"adm:m:{i}".encode())])
+    rows.append([Button.inline("🔙 بازگشت", b"adm:panel")])
+    return rows
+
+
+@client.on(events.NewMessage(incoming=True, pattern=r"^/admin\s*$"))
+async def admin_panel_cmd(event):
+    """پنل مدیریت — فقط ادمین"""
+    if not is_admin(event.sender_id):
+        await event.reply("این دستور فقط برای مدیر ربات است.", parse_mode=None)
+        return
+    ADMIN_STAGE.pop(event.sender_id, None)
+    await event.reply(_admin_panel_text(), parse_mode=None,
+                      buttons=_admin_panel_buttons())
+
+
+@client.on(events.NewMessage(incoming=True, pattern=r"^/id\s*$"))
+async def my_id_handler(event):
+    """نمایش آیدی عددی — برای ست کردن ADMIN_IDS و بن کردن"""
+    await event.reply(f"👤 آیدی عددی شما: {event.sender_id}\n"
+                      f"مدیر ربات: {'بله' if is_admin(event.sender_id) else 'خیر'}",
+                      parse_mode=None)
+
+
+@client.on(events.CallbackQuery(pattern=r"^adm:"))
+async def admin_panel_handler(event):
+    """دکمه‌های پنل مدیریت"""
+    if not is_admin(event.sender_id):
+        await event.answer("این بخش فقط برای مدیر ربات است.", alert=True)
+        return
+    action = (event.data or b"").decode("utf-8", "ignore")
+    if action == "adm:close":
+        ADMIN_STAGE.pop(event.sender_id, None)
+        await event.answer()
+        try:
+            await event.delete()
+        except Exception:
+            pass
+        return
+    if action == "adm:panel":
+        await event.answer()
+        await event.edit(_admin_panel_text(), parse_mode=None,
+                         buttons=_admin_panel_buttons())
+        return
+    if action == "adm:models":
+        await event.answer()
+        await event.edit(
+            "🤖 کدام مدل برای «ساخت با ایجنت» همهٔ کاربران استفاده شود؟\n"
+            "(مدل‌های «زن» = ظرفیت رایگان سرویس OpenCode)",
+            parse_mode=None, buttons=_admin_models_buttons())
+        return
+    if action == "adm:mfree":
+        AGENT_CFG["agent_model"] = ""
+        _save_agent_cfg()
+        await event.answer("انتخاب آزاد توسط کاربر فعال شد", alert=True)
+        await event.edit(_admin_panel_text(), parse_mode=None,
+                         buttons=_admin_panel_buttons())
+        return
+    if action.startswith("adm:m:"):
+        try:
+            idx = int(action.split(":")[2])
+        except ValueError:
+            await event.answer("دادهٔ دکمه نامعتبر است.", alert=True)
+            return
+        models = _agent_models()
+        if not (0 <= idx < len(models)):
+            await event.answer("این مدل دیگر موجود نیست.", alert=True)
+            return
+        m = models[idx]
+        AGENT_CFG["agent_model"] = m["id"]
+        _save_agent_cfg()
+        await event.answer(f"مدل برای همه ثبت شد: {m['label']}", alert=True)
+        await event.edit(_admin_panel_text(), parse_mode=None,
+                         buttons=_admin_panel_buttons())
+        return
+    if action in ("adm:ban", "adm:unban"):
+        ADMIN_STAGE[event.sender_id] = {
+            "stage": "ban" if action == "adm:ban" else "unban", "ts": time.time()}
+        await event.answer()
+        await client.send_message(
+            event.chat_id,
+            ("🚫 آیدی عددی کاربری که باید بن شود را بفرستید:\n"
+             "(راه دیگر: روی پیام کاربر ریپلای کنید و /ban بزنید)\n"
+             "لغو: «لغو» را بفرستید" if action == "adm:ban" else
+             "🔓 آیدی عددی کاربری که بنش برداشته شود را بفرستید:\n"
+             "لغو: «لغو» را بفرستید"),
+            parse_mode=None)
+        return
+    if action == "adm:zenkey":
+        ADMIN_STAGE[event.sender_id] = {"stage": "zenkey", "ts": time.time()}
+        await event.answer()
+        await client.send_message(
+            event.chat_id,
+            "🔑 کلید API سرویس OpenCode (Zen) را بفرستید.\n"
+            "کلید رایگان از opencode.ai قابل ساخت است.\n"
+            "کلید به‌صورت secret روی مخزن GitHub ثبت می‌شود و مدل‌های رایگان زن "
+            "(GLM، DeepSeek، Kimi و...) در «ساخت با ایجنت» فعال می‌شوند.\n\n"
+            "لغو: «لغو» را بفرستید",
+            parse_mode=None)
+        return
+    if action == "adm:banlist":
+        await event.answer()
+        if not banned_ids:
+            txt = "🚫 فهرست بن‌شده‌ها خالی است."
+        else:
+            ids = "، ".join(str(x) for x in sorted(banned_ids)[:100])
+            txt = f"🚫 بن‌شده‌ها ({len(banned_ids)} نفر):\n{ids}"
+        await event.edit(txt, parse_mode=None,
+                         buttons=[[Button.inline("🔙 بازگشت", b"adm:panel")]])
+        return
+    if action == "adm:status":
+        await event.answer()
+        runs = []
+        if gh is not None and gh.available():
+            try:
+                runs = await asyncio.to_thread(gh.recent_runs, 3)
+            except Exception:
+                runs = []
+        lines = ["📊 وضعیت ایجنت", "",
+                 f"GitHub: {'✅ متصل — ' + gh.GH_REPO if (gh is not None and gh.available()) else '❌ تنظیم نشده'}",
+                 f"🔑 کلید زن: {'✅ ثبت شده' if zen_key_set() else '❌ ثبت نشده'}",
+                 f"🎯 مدل فعال: {(pinned_agent_model() or {}).get('label') or 'انتخاب آزاد'}",
+                 f"🤖 مدل‌های در دسترس: {len(_agent_models())}",
+                 f"🚫 بن‌شده‌ها: {len(banned_ids)} نفر", ""]
+        if runs:
+            lines.append("آخرین اجراها:")
+            for r in runs:
+                ico = {"success": "✅", "failure": "⚠️"}.get(r.get("conclusion"),
+                                                            "⏳" if r.get("status") != "completed" else "❔")
+                lines.append(f"• {ico} {str(r.get('created_at') or '')[:16]} — "
+                             f"{r.get('conclusion') or r.get('status')}")
+        else:
+            lines.append("هنوز اجرایی ثبت نشده است.")
+        await event.edit("\n".join(lines), parse_mode=None,
+                         buttons=[[Button.inline("🔄 به‌روزرسانی", b"adm:status"),
+                                   Button.inline("🔙 بازگشت", b"adm:panel")]])
+        return
+    await event.answer()
+
+
+@client.on(events.NewMessage(incoming=True))
+async def admin_stage_handler(event):
+    """ورودی‌های مرحله‌ای ادمین در پنل (بن/آن‌بن/کلید زن)"""
+    if not event.is_private or not is_admin(event.sender_id):
+        return
+    st = ADMIN_STAGE.get(event.sender_id)
+    if not st:
+        return
+    txt = (event.message.text or "").strip()
+    if txt.startswith("/"):
+        ADMIN_STAGE.pop(event.sender_id, None)   # هر دستور = لغو مرحله
+        return
+    now = time.time()
+    if now - st.get("ts", 0) > ADMIN_STAGE_TTL:
+        ADMIN_STAGE.pop(event.sender_id, None)
+        return
+    if txt in ("لغو", "انصراف", "cancel", "بازگشت"):
+        ADMIN_STAGE.pop(event.sender_id, None)
+        await event.reply("لغو شد.", parse_mode=None)
+        event.stop_propagation()
+        return
+    stage = st["stage"]
+    if stage in ("ban", "unban"):
+        m = re.search(r"\b(\d{4,15})\b", txt)
+        if not m:
+            await event.reply("آیدی عددی معتبر نیست؛ دوباره بفرستید یا «لغو» را بنویسید.",
+                              parse_mode=None)
+            event.stop_propagation()
+            return
+        target = int(m.group(1))
+        ADMIN_STAGE.pop(event.sender_id, None)
+        if stage == "ban":
+            if target in ADMIN_IDS:
+                await event.reply("⚠️ نمی‌توان ادمین را بن کرد.", parse_mode=None)
+            else:
+                banned_ids.add(target)
+                _save_banned()
+                await event.reply(f"🚫 کاربر {target} بن شد و از این پس پیام «در لیست استفاده‌کنندگان نیستید» می‌گیرد.\n"
+                                  f"تعداد بن‌شده‌ها: {len(banned_ids)}", parse_mode=None)
+                admin_log(f"🚫 بن شد: {target} | توسط ادمین (پنل)")
+        else:
+            if target in banned_ids:
+                banned_ids.discard(target)
+                _save_banned()
+                await event.reply(f"✅ بن کاربر {target} برداشته شد.\nتعداد بن‌شده‌ها: {len(banned_ids)}",
+                                  parse_mode=None)
+                admin_log(f"✅ آن‌بن شد: {target} | توسط ادمین (پنل)")
+            else:
+                await event.reply(f"کاربر {target} در فهرست بن نیست.", parse_mode=None)
+        event.stop_propagation()
+        return
+    if stage == "zenkey":
+        ADMIN_STAGE.pop(event.sender_id, None)
+        key = txt.strip()
+        if len(key) < 10 or (" " in key or "\n" in key):
+            await event.reply("کلید نامعتبر است؛ دوباره از «🔑 کلید OpenCode Zen» شروع کنید.",
+                              parse_mode=None)
+            event.stop_propagation()
+            return
+        try:
+            await asyncio.to_thread(gh.set_repo_secret, "OPENCODE_API_KEY", key)
+        except Exception as e:
+            await event.reply(f"ثبت کلید ناموفق بود:\n{_clean_err(str(e))[:200]}",
+                              parse_mode=None)
+            event.stop_propagation()
+            return
+        zen_key_set(force=True)
+        await event.reply("✅ کلید OpenCode Zen روی مخزن ثبت شد.\n"
+                          "از این پس مدل‌های رایگان زن (GLM، DeepSeek، Kimi و...) "
+                          "در «ساخت با ایجنت» در دسترس‌اند.", parse_mode=None)
+        admin_log("🔑 کلید OpenCode Zen توسط ادمین ثبت شد")
+        event.stop_propagation()
 
 
 @client.on(events.CallbackQuery(pattern=r"^jz:"))
@@ -1640,9 +2000,14 @@ async def jz_agent_start_handler(event):
     if len((data.get("text") or "").split()) < 60:
         await event.answer("متن برای ساخت جزوه بسیار کوتاه است.", alert=True)
         return
+    pin = pinned_agent_model()
+    if pin:
+        # مدل از پیش توسط مدیر برای همه تعیین شده — مستقیم شروع می‌شود
+        await _launch_agent_job(event, data, token, pin, " — انتخاب مدیر")
+        return
     await event.answer()
     await event.edit(
-        "🤖 «جزوهٔ ویژه» با کیفیت بالاتر ساخته می‌شود: هوش مصنوعی کل متن را چند بار مرور می‌کند، "
+        "🤖 «ساخت با ایجنت» با کیفیت بالاتر انجام می‌شود: ایجنت OpenCode کل متن را چند بار مرور می‌کند، "
         "طرح کلی می‌چیند و جزوه‌ای کامل، منسجم و یکپارچه می‌نویسد.\n\n"
         "با کدام مدل ساخته شود؟\n"
         "(برای متن‌های طولانی، مدل با کانتکست بزرگ‌تر پیشنهاد می‌شود)",
@@ -1688,33 +2053,7 @@ async def jz_model_pick_handler(event):
     if gh is None or not gh.available():
         await event.answer("این قابلیت فعلاً در دسترس نیست.", alert=True)
         return
-    data["busy"] = True
-    try:
-        await event.answer("در حال شروع ساخت جزوه...")
-    except Exception:
-        pass
-    job_id = uuid.uuid4().hex[:10]
-    branch = f"agent-job-{job_id}"
-    status = await event.edit(
-        f"🤖 در حال ساخت جزوهٔ ویژه...\nمدل: {model['label']}\n\n"
-        "معمولاً ۳ تا ۸ دقیقه زمان می‌برد (متن‌های خیلی طولانی تا ۱۵ دقیقه). "
-        "همین پیام به‌روز می‌شود.",
-        parse_mode=None, buttons=None,
-    )
-    try:
-        await asyncio.to_thread(gh.start_agent_job, data["text"], model["id"], job_id, branch)
-    except gh.GhError as e:
-        data["busy"] = False
-        await safe_edit(status, f"شروع ساخت ممکن نشد:\n{_clean_err(str(e))[:250]}\n\nمتن محفوظ است — دوباره امتحان کنید.")
-        admin_log(f"⚠️ آغاز ایجنت ناموفق: {str(e)[:150]} | user={data['user_id']}")
-        return
-    info = {"token": token, "chat_id": data["chat_id"], "user_id": data["user_id"],
-            "branch": branch, "model": model["id"], "model_label": model["label"],
-            "title": data["title"], "text": data["text"], "status": status,
-            "t0": time.time(), "mid": False}
-    AGENT_JOBS[job_id] = info
-    admin_log(f"🤖 درخواست جزوهٔ ایجنت — «{data['title'][:40]}» | مدل: {model['id']} | user={data['user_id']}")
-    asyncio.create_task(_run_agent_job(job_id, info))
+    await _launch_agent_job(event, data, token, model)
 
 
 @client.on(events.NewMessage(incoming=True))
@@ -2347,6 +2686,9 @@ def start_health_server():
                         return
                     agent = {
                         "gh_configured": bool(gh is not None and gh.available()),
+                        "gh_repo": (gh.GH_REPO if gh is not None else ""),
+                        "zen_key": zen_key_set(),
+                        "pinned_model": AGENT_CFG.get("agent_model") or "",
                         "models": [m.get("id") for m in _agent_models()],
                         "banned": len(banned_ids),
                         "admin": list(ADMIN_IDS),
