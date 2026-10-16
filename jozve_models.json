@@ -5,9 +5,9 @@
     "openrouter-free": {"label": "OpenRouter", "env": "OPENROUTER_API_KEY"}
   },
   "models": [
-    {"id": "gemini-free/gemini-3.8-flash", "provider": "gemini-free", "label": "Gemini Flash — کانتکست ۱ میلیون؛ پیشنهادی برای جزوهٔ طولانی"},
-    {"id": "groq-free/gpt-oss-120b", "provider": "groq-free", "label": "GPT-OSS 120B روی Groq — سریع، کانتکست ۱۲۸K"},
-    {"id": "groq-free/llama-3.3-70b-versatile", "provider": "groq-free", "label": "Llama 3.3 70B روی Groq — سریع"},
-    {"id": "openrouter-free/nvidia/nemotron-3-ultra-550b-a55b:free", "provider": "openrouter-free", "label": "Nemotron 3 Ultra 550B روی OpenRouter — کیفیت بالا"}
+    {"id": "gemini-free/gemini-3.8-flash", "provider": "gemini-free", "label": "Gemini Flash — کانتکست بزرگ؛ پیشنهادی برای متن طولانی"},
+    {"id": "groq-free/gpt-oss-120b", "provider": "groq-free", "label": "GPT-OSS 120B — سریع"},
+    {"id": "groq-free/llama-3.3-70b-versatile", "provider": "groq-free", "label": "Llama 3.3 70B — سریع"},
+    {"id": "openrouter-free/nvidia/nemotron-3-ultra-550b-a55b:free", "provider": "openrouter-free", "label": "Nemotron Ultra 550B — کیفیت بالا"}
   ]
 }
