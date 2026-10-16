@@ -223,20 +223,51 @@ jobs:
           }
           HTMLF="agent-jobs/$JOB/output.html"
           PDFF="agent-jobs/$JOB/output.pdf"
-          if ! run_oc "$MODEL" "jozve-$JOB"; then
-            if [ -n "${DEFAULT_MODEL:-}" ] && [ "$MODEL" != "$DEFAULT_MODEL" ]; then
-              echo "::warning::مدل $MODEL ناموفق بود — تلاش مجدد با $DEFAULT_MODEL"
-              run_oc "$DEFAULT_MODEL" "jozve-$JOB-fb"
-            else
-              tail -c 600 /tmp/oc.log || true
-              exit 1
+          # فهرست همهٔ مدل‌های کانفیگ‌شده — برای تلاش جایگزین وقتی مدل اصلی (مثلاً با سهمیهٔ تمام‌شده) جواب نداد
+          ALL_MODELS=$(python3 - <<'PY'
+          import json
+          try:
+              cfg = json.load(open("opencode.json", encoding="utf-8"))
+          except Exception:
+              raise SystemExit
+          out = []
+          for pid, p in (cfg.get("provider") or {}).items():
+              for mk in (p.get("models") or {}):
+                  out.append(pid + "/" + mk)
+          print("\n".join(out))
+          PY
+          )
+          run_oc() {
+            opencode run --auto -m "$1" --title "$2" "$TASK" </dev/null 2>&1 | tee /tmp/oc.log
+          }
+          try_model() {   # $1=مدل  $2=برچسب — موفق یعنی output.html واقعاً ساخته شد
+            run_oc "$1" "jozve-$JOB-$2"
+            [ -s "$HTMLF" ]
+          }
+          if ! try_model "$MODEL" "main"; then
+            echo "::warning::مدل $MODEL خروجی نساخت — تلاش با بقیهٔ مدل‌ها"
+            while IFS= read -r m; do
+              [ -n "$m" ] || continue
+              [ "$m" = "$MODEL" ] && continue
+              if [ -n "${DEFAULT_MODEL:-}" ] && [ "$m" = "$DEFAULT_MODEL" ]; then continue; fi
+              echo "::warning::تلاش با مدل جایگزین: $m"
+              if try_model "$m" "alt"; then break; fi
+            done <<< "$ALL_MODELS"
+            if [ ! -s "$HTMLF" ] && [ -n "${DEFAULT_MODEL:-}" ] && [ "$MODEL" != "$DEFAULT_MODEL" ]; then
+              try_model "$DEFAULT_MODEL" "fb" || true
             fi
           fi
           if [ ! -s "$HTMLF" ]; then
             echo "::warning::output.html توسط ایجنت نوشته نشد — استخراج از خروجی استاندارد"
-            grep -vE '^(opencode v|>|[0-9]{4}-[0-9]{2}-[0-9]{2}T)' /tmp/oc.log > "$HTMLF" || true
+            grep -vE '^(opencode v|>|→|[0-9]{4}-[0-9]{2}-[0-9]{2}T)' /tmp/oc.log > "$HTMLF" || true
           fi
           [ -s "$HTMLF" ] || { echo "::error::هیچ خروجی‌ای تولید نشد"; exit 1; }
+          # اعتبارسنجی: خروجی باید واقعاً سند HTML باشد، نه لاگ ایجنت
+          if ! grep -qi "<html" "$HTMLF"; then
+            echo "::error::خروجی ایجنت سند HTML نبود"
+            tail -c 400 /tmp/oc.log || true
+            exit 1
+          fi
           # اگر خود ایجنت PDF نساخته بود، همین‌جا ساخته می‌شود (تور ایمنی)
           if [ ! -s "$PDFF" ]; then
             python3 -m weasyprint "$HTMLF" "$PDFF" || echo "::warning::تبدیل PDF ناموفق بود — فقط HTML کامیت می‌شود"
