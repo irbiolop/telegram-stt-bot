@@ -1,5 +1,5 @@
 {
-  "_doc": "فهرست مدل‌های ایجنت جزوه — منبع واحد حقیقت؛ هم ربات و هم ورک‌فلوی Actions از همین فایل کانفیگ opencode.json می‌سازند. تامین‌کنندهٔ opencode = سرویس رسمی OpenCode Zen (مدل‌های رایگان با cost=0 — از models.dev استخراج شده). فیلد verify = endpoint فهرست مدل‌ها برای حذف خودکار مدل‌های بازنشسته.",
+  "_doc": "فهرست مدل‌های ایجنت جزوه — منبع واحد حقیقت؛ هم ربات و هم ورک‌فلوی Actions از همین فایل کانفیگ opencode.json می‌سازند. تامین‌کنندهٔ opencode = سرویس رسمی (مدل‌های رایگان با cost=0). نکته: مدل‌های Groq از فهرست حذف شدند — llama-3.3 بازنشسته شد و gpt-oss با CLI ناسازگار است (خطای reasoning_content).",
   "providers": {
     "opencode": {
       "label": "OpenCode Zen",
@@ -42,8 +42,6 @@
     {"id": "opencode/grok-code", "provider": "opencode", "label": "Grok Code Fast (رایگان)", "ctx": 256000, "out": 256000},
     {"id": "opencode/ling-3.1-flash-free", "provider": "opencode", "label": "Ling 3.1 Flash (رایگان)", "ctx": 262144, "out": 32768},
     {"id": "gemini-free/gemini-3.8-flash", "provider": "gemini-free", "label": "Gemini Flash — کانتکست بزرگ", "ctx": 1000000, "out": 65536},
-    {"id": "groq-free/llama-3.3-70b-versatile", "provider": "groq-free", "label": "Llama 3.3 70B — سریع", "ctx": 131072, "out": 32768},
-    {"id": "groq-free/openai/gpt-oss-120b", "provider": "groq-free", "label": "GPT-OSS 120B", "ctx": 131072, "out": 32768},
     {"id": "openrouter-free/nvidia/nemotron-3-ultra-550b-a55b:free", "provider": "openrouter-free", "label": "Nemotron Ultra 550B", "ctx": 1000000, "out": 128000},
     {"id": "openrouter-free/nvidia/nemotron-3.5-lightning:free", "provider": "openrouter-free", "label": "Nemotron 3.5 Lightning", "ctx": 262144, "out": 65536}
   ]
