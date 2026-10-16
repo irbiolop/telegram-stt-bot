@@ -165,13 +165,34 @@ def dispatch(event_type: str, payload: dict):
          json={"event_type": event_type, "client_payload": payload}, ok=(200, 201, 204))
 
 
-def start_agent_job(text: str, model: str, job_id: str, branch: str) -> str:
-    """شاخهٔ موقت + متن رونویسی + dispatch — همهٔ گام‌های آغاز یک job."""
+def start_agent_job(text: str, model: str, job_id: str, branch: str,
+                    style_json: str = "") -> str:
+    """شاخهٔ موقت + متن رونویسی + استایل (پالت/پرامپت مدیر) + dispatch"""
     create_branch(branch)
     put_file(branch, f"{JOB_DIR}/{job_id}/{INPUT_NAME}", text,
              message=f"jozve job {job_id}: input")
+    if style_json:
+        put_file(branch, f"{JOB_DIR}/{job_id}/style.json", style_json,
+                 message=f"jozve job {job_id}: style")
     dispatch(GH_AGENT_EVENT, {"job_id": job_id, "model": model, "branch": branch})
     return branch
+
+
+def get_file_bytes(branch: str, path: str):
+    """محتوای باینری فایل از شاخه؛ نبودن ← None"""
+    r = _req("GET", f"/repos/{GH_REPO}/contents/{path}", allow_404=True,
+             params={"ref": branch, "t": str(int(time.time() * 1000))})
+    if r is None:
+        return None
+    d = r.json() or {}
+    if d.get("encoding") == "base64":
+        return base64.b64decode(d.get("content") or "")
+    url = d.get("download_url")
+    if url:
+        rr = requests.get(url, timeout=180)
+        if rr.status_code == 200:
+            return rr.content
+    return None
 
 
 def get_agent_output(job_id: str, branch: str):
@@ -179,6 +200,21 @@ def get_agent_output(job_id: str, branch: str):
     out = get_file(branch, f"{JOB_DIR}/{job_id}/{OUTPUT_NAME}")
     if out:
         return {"ok": True, "text": out}
+    err = get_file(branch, f"{JOB_DIR}/{job_id}/{ERROR_NAME}")
+    if err:
+        return {"ok": False, "error": err[:800]}
+    return None
+
+
+def get_agent_files(job_id: str, branch: str):
+    """خروجی ایجنت در حالت HTML مستقیم: output.pdf (باینری) + output.html + error.txt.
+    هیچ‌کدام نبود ← None؛ اولویت با PDF است."""
+    pdf = get_file_bytes(branch, f"{JOB_DIR}/{job_id}/output.pdf")
+    if pdf:
+        return {"ok": True, "pdf": pdf}
+    html = get_file(branch, f"{JOB_DIR}/{job_id}/output.html")
+    if html:
+        return {"ok": True, "pdf": None, "html": html}
     err = get_file(branch, f"{JOB_DIR}/{job_id}/{ERROR_NAME}")
     if err:
         return {"ok": False, "error": err[:800]}
@@ -193,6 +229,16 @@ def poll_agent_output(job_id: str, branch: str, timeout_s=18 * 60, tick=20,
                       on_tick=None):
     """تا آماده شدن خروجی ایجنت صبر می‌کند؛ نتیجه/None (تایم‌اوت) برمی‌گرداند.
     on_tick(elapsed) برای پیام‌های میانهٔ ربات."""
+    return _poll(lambda: get_agent_output(job_id, branch), timeout_s, tick, on_tick)
+
+
+def poll_agent_files(job_id: str, branch: str, timeout_s=18 * 60, tick=20,
+                     on_tick=None):
+    """همان پایش، برای خروجی HTML/PDF (روش مستقیم)"""
+    return _poll(lambda: get_agent_files(job_id, branch), timeout_s, tick, on_tick)
+
+
+def _poll(fetch, timeout_s, tick, on_tick):
     t0 = time.time()
     fail_streak = 0
     while time.time() - t0 < timeout_s:
@@ -202,7 +248,7 @@ def poll_agent_output(job_id: str, branch: str, timeout_s=18 * 60, tick=20,
             except Exception:
                 pass
         try:
-            res = get_agent_output(job_id, branch)
+            res = fetch()
             fail_streak = 0
             if res is not None:
                 return res
