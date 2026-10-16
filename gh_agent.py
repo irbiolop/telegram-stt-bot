@@ -215,13 +215,14 @@ def poll_agent_output(job_id: str, branch: str, timeout_s=18 * 60, tick=20,
 
 
 # =========================================================
-#  gist — ذخیرهٔ پایدار بن‌شده‌ها
+#  gist — ذخیرهٔ پایدار (بن‌شده‌ها + تنظیمات ایجنت)
 # =========================================================
 BAN_FILENAME = "banned.json"
+CONFIG_FILENAME = "config.json"
 
 
-def gist_read(gid: str):
-    """محتوای فایل banned.json داخل gist؛ نبودن/خطا ← None"""
+def gist_read(gid: str, filename: str = BAN_FILENAME):
+    """محتوای یک فایل داخل gist؛ نبودن فایل/خطا ← None"""
     try:
         r = _req("GET", f"/gists/{gid}", allow_404=True)
     except GhError:
@@ -229,7 +230,9 @@ def gist_read(gid: str):
     if r is None:
         return None
     files = (r.json() or {}).get("files") or {}
-    f = files.get(BAN_FILENAME) or {}
+    f = files.get(filename) or {}
+    if not f:
+        return None   # فایل هنوز در gist ساخته نشده (با نوشتن بعدی اضافه می‌شود)
     if f.get("truncated"):
         url = f.get("raw_url")
         if not url:
@@ -239,11 +242,11 @@ def gist_read(gid: str):
     return f.get("content")
 
 
-def gist_write(gid: str, content: str) -> bool:
-    """به‌روزرسانی gist موجود — False یعنی gist دیگر در دسترس نیست."""
+def gist_write(gid: str, content: str, filename: str = BAN_FILENAME) -> bool:
+    """ساخت/به‌روزرسانی یک فایل داخل gist — False یعنی gist دیگر در دسترس نیست."""
     try:
         _req("PATCH", f"/gists/{gid}",
-             json={"files": {BAN_FILENAME: {"content": content}}})
+             json={"files": {filename: {"content": content}}})
         return True
     except GhError:
         return False
@@ -266,3 +269,47 @@ def gist_delete(gid: str):
         _req("DELETE", f"/gists/{gid}", allow_404=True)
     except GhError:
         pass
+
+
+# =========================================================
+#  secrets اکشنز + وضعیت اجراها (برای پنل مدیریت)
+# =========================================================
+def list_repo_secrets() -> list:
+    """نام secrets مخزن — برای چک «کلید زن ست شده؟» (نیازمند PAT مالک)"""
+    r = _req("GET", f"/repos/{GH_REPO}/actions/secrets", ok=(200,))
+    return [s.get("name") for s in ((r.json() or {}).get("secrets") or [])]
+
+
+def set_repo_secret(name: str, value: str):
+    """ثبت/به‌روزرسانی یک secret مخزن با sealed box (کتابخانهٔ PyNaCl).
+    برای افزودن کلید OpenCode Zen از داخل خود ربات."""
+    try:
+        from nacl import encoding as _enc, public as _pub
+    except ImportError:
+        raise GhError("کتابخانهٔ PyNaCl روی سرور نصب نیست (requirements را به‌روز کنید)")
+    r = _req("GET", f"/repos/{GH_REPO}/actions/secrets/public-key", ok=(200,))
+    pk = r.json() or {}
+    if not pk.get("key"):
+        raise GhError("کلید عمومی secrets مخزن گرفته نشد")
+    pkey = _pub.PublicKey(pk["key"].encode(), _enc.Base64Encoder())
+    sealed = _pub.SealedBox(pkey)
+    enc = sealed.encrypt(value.encode("utf-8"))
+    _req("PUT", f"/repos/{GH_REPO}/actions/secrets/{name}",
+         json={"encrypted_value": base64.b64encode(enc).decode(),
+               "key_id": pk.get("key_id")}, ok=(201, 204), timeout=90)
+
+
+def recent_runs(count: int = 3) -> list:
+    """آخرین اجراهای ورک‌فلوی jozve-agent برای نمایش در پنل مدیریت"""
+    try:
+        r = _req("GET", f"/repos/{GH_REPO}/actions/workflows/jozve-agent.yml/runs",
+                 params={"per_page": str(count)}, ok=(200,))
+    except GhError:
+        return []
+    out = []
+    for w in ((r.json() or {}).get("workflow_runs") or [])[:count]:
+        out.append({"status": w.get("status"),
+                    "conclusion": w.get("conclusion"),
+                    "created_at": w.get("created_at"),
+                    "url": w.get("html_url")})
+    return out
