@@ -42,7 +42,7 @@ WORKDIR /app
 COPY --chown=user:user requirements.txt .
 RUN pip install -q --no-cache-dir -r requirements.txt
 
-COPY --chown=user:user bot.py jozve.py ./
+COPY --chown=user:user bot.py jozve.py gh_agent.py jozve_models.json jozve_prompt.md ./
 
 # نشست ربات در این پوشه ذخیره می‌شود (با volume مount کنید تا بعد از ری‌استارت دوباره لاگین نشود)
 ENV SESSION_NAME=/app/session/stt_bot_session
