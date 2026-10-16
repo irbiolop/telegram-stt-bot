@@ -41,21 +41,23 @@ jobs:
           python3 - <<'PY'
           import json, os
           prov = {}
-          def add(pid, name, base, envk, models, headers=None):
+          def add(pid, name, base, envk, models, headers=None, npm_pkg="@ai-sdk/openai-compatible"):
               if not os.getenv(envk):
                   return
-              p = {"npm": "@ai-sdk/openai-compatible", "name": name,
-                   "options": {"baseURL": base, "apiKey": "{env:%s}" % envk},
-                   "models": models}
+              opts = {"apiKey": "{env:%s}" % envk}
+              if base:
+                  opts["baseURL"] = base
+              p = {"npm": npm_pkg, "name": name,
+                   "options": opts, "models": models}
               if headers:
                   p["headers"] = headers
               prov[pid] = p
-          add("gemini-free", "Gemini",
-              "https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", {
+          add("gemini-free", "Gemini", None, "GEMINI_API_KEY", {
                   os.getenv("GEMINI_MODEL", "gemini-3.8-flash"):
                       {"name": "Gemini Flash",
                        "limit": {"context": 1000000, "output": 65536}},
-              })
+              },
+              npm_pkg="@ai-sdk/google")
           add("groq-free", "Groq",
               "https://api.groq.com/openai/v1", "GROQ_API_KEY", {
                   "gpt-oss-120b": {"name": "GPT-OSS 120B",
