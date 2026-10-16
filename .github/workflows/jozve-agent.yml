@@ -52,21 +52,20 @@ jobs:
               prov[pid] = p
           add("gemini-free", "Gemini",
               "https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", {
-                  "flash": {"modelID": os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
-                            "name": "Gemini Flash",
-                            "limit": {"context": 1000000, "output": 65536}},
+                  os.getenv("GEMINI_MODEL", "gemini-3.8-flash"):
+                      {"name": "Gemini Flash",
+                       "limit": {"context": 1000000, "output": 65536}},
               })
           add("groq-free", "Groq",
               "https://api.groq.com/openai/v1", "GROQ_API_KEY", {
-                  "gpt-oss-120b": {"modelID": "gpt-oss-120b", "name": "GPT-OSS 120B",
+                  "gpt-oss-120b": {"name": "GPT-OSS 120B",
                                    "limit": {"context": 131072, "output": 32768}},
-                  "llama70b": {"modelID": "llama-3.3-70b-versatile", "name": "Llama 3.3 70B",
-                               "limit": {"context": 131072, "output": 32768}},
+                  "llama-3.3-70b-versatile": {"name": "Llama 3.3 70B",
+                                              "limit": {"context": 131072, "output": 32768}},
               })
           add("openrouter-free", "OpenRouter",
               "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", {
-                  "nemotron-ultra": {"modelID": "nvidia/nemotron-3-ultra-550b-a55b:free",
-                                     "name": "Nemotron 3 Ultra 550B"},
+                  "nvidia/nemotron-3-ultra-550b-a55b:free": {"name": "Nemotron 3 Ultra 550B"},
               },
               headers={"HTTP-Referer": "https://github.com/irbiolop/telegram-stt-bot",
                        "X-Title": "telegram-stt-bot-agent"})
