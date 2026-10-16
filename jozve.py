@@ -130,7 +130,7 @@ def _debug_dump(name: str, text: str):
             pass
 MAX_SECTIONS = int(os.getenv("JOZVE_MAX_SECTIONS", "8"))       # سقف تعداد فصل‌ها
 REQUEST_GAP = float(os.getenv("JOZVE_GAP", "3.0"))             # فاصله بین درخواست‌ها (سقف ۲۰/دقیقه)
-SHORT_WORDS = int(os.getenv("JOZVE_SHORT_WORDS", "600"))       # زیر این تعداد کلمه، تک‌فصلی
+SHORT_WORDS = int(os.getenv("JOZVE_SHORT_WORDS", "1500"))      # زیر این تعداد کلمه، تک‌فصلی (جزوهٔ یکپارچه — نه چند پارت)
 FREE_DAILY = int(os.getenv("JOZVE_DAILY_BUDGET", "50"))        # سقف رایگان روزانه OpenRouter
 
 _FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
@@ -454,7 +454,13 @@ SYSTEM_EDITOR = (
     "قانون ۸ — اسکلت ثابت هر فصل (به همین ترتیب): (الف) شروع با «## تیتر کوتاه و گویا»؛ "
     "(ب) بلافاصله یک پاراگراف معرفیِ ۲ تا ۳ جمله‌ای که بگوید این فصل چه بخشی از مطلب را پوشش می‌دهد؛ "
     "(ج) بدنهٔ فصل با چند «### زیرتیتر» به همان ترتیب خودِ متن؛ (د) پایان هر فصل با یک کادر "
-    ":::summary با عنوان «جمع‌بندی» که نکته‌های کلیدی همان فصل را در چند بند فهرست می‌کند.\n\n" + MARKUP_SPEC
+    ":::summary با عنوان «جمع‌بندی» که نکته‌های کلیدی همان فصل را در چند بند فهرست می‌کند.\n\n"
+
+    "قانون ۹ — انسجام سراسری؛ «یک جزوه، نه چند پارت» (حیاتی): جزوه یک سند واحد است، نه "
+    "مجموعه‌ای از قطعه‌های جدا. اصطلاح‌ها، نام‌ها و ترجمهٔ واژه‌های فنی در تمام جزوه یکسان باشند؛ "
+    "تعریف‌ها فقط بار اول کامل بیایند و در فصل‌های بعد با ارجاع طبیعی («همان‌طور که در فصل قبل "
+    "دیدیم…») استفاده شوند؛ بازگویی تکراری ممنوع. تیترها هم‌سبک و در یک نظام واحد باشند و فصل "
+    "با پیوند طبیعی به فصل قبل وصل شود تا خواننده حس کند چهار مطلب جداگانه به هم دوخته شده‌اند.\n\n" + MARKUP_SPEC
 )
 
 PLANNER_SYSTEM = ""  # (منسوخ — فصل‌بندی محلی شد تا ۱ درخواست در هر جزوه صرفه‌جویی شود)
@@ -701,7 +707,7 @@ def _clean_fragment(t: str) -> str:
 
 
 def _write_section(words, i, k, sec: dict, a: int, b: int, used: set,
-                   custom_prompt: str = "") -> str:
+                   custom_prompt: str = "", prev_titles=None) -> str:
     range_text = " ".join(words[a:b])
     prev_note = (" ".join(words[max(0, a - 12):a]) or "—") if a > 0 else "آغاز متن"
     next_note = (" ".join(words[b:b + 12]) or "—") if b < len(words) else "پایان متن"
@@ -716,9 +722,19 @@ def _write_section(words, i, k, sec: dict, a: int, b: int, used: set,
         "این دستور در کنار قوانین پایه جزوه اعمال می‌شود؛ در تعارض، قوانین پایه "
         "(فارسی، پوشش کامل، منع اختراع، مارکاپ) مقدم‌اند.\n\n"
     ) if cp else ""
+    # انسجام سراسری: تیتر فصل‌های قبلی به مدل داده می‌شود تا جزوه «یک سند واحد» بماند
+    pt_block = ""
+    if prev_titles:
+        listing = "\n".join(f"- فصل {fa_num(j + 1)}: {t}" for j, t in enumerate(prev_titles[-8:]))
+        pt_block = (
+            "فصل‌هایی که قبلاً نوشته شده‌اند (برای انسجام سراسری — تیترشان را عیناً تکرار نکن، "
+            "تعریف‌های قبلی را بازگویی نکن و در صورت لزوم با «فصل قبل» ارجاع طبیعی بده):\n"
+            f"{listing}\n\n"
+        )
     user_msg = (
         f"شما فصل {fa_num(i)} از {fa_num(k)} جزوه را می‌نویسید (مجموعه‌ای پیوسته که با هم کل جزوه را می‌سازند).\n"
         f"{title_line}\n\n"
+        f"{pt_block}"
         f"{cp_block}"
         f"متن کامل بازهٔ تو (ویراستاری فقط روی همین):\n"
         f"⟦بازه⟧\n{range_text}\n⟦پایان بازه⟧\n\n"
@@ -1385,12 +1401,17 @@ def _produce(text: str, display_name: str, out_dir: str, progress,
     used = set()
     parts = []
     partial_note = None
+    prev_titles = []   # انسجام سراسری: تیتر فصل‌های قبلی به فصل بعد می‌رسد
     for i in range(k):
         sec = plan["sections"][i]
         a, b = ranges[i]
         _p({"stage": "section", "section": i + 1, "total": k, "title": sec["title"]})
         try:
-            parts.append(_write_section(words, i + 1, k, sec, a, b, used, custom_prompt))
+            frag = _write_section(words, i + 1, k, sec, a, b, used, custom_prompt, prev_titles)
+            parts.append(frag)
+            m = re.search(r"^##\s+(.+)$", frag, re.M)
+            if m:
+                prev_titles.append(m.group(1).strip()[:70])
         except QuotaExhausted as qe:
             partial_note = f"سهمیهٔ روزانه در فصل {fa_num(i + 1)} از {fa_num(k)} به پایان رسید؛ این نسخه ناقص است"
             log.warning(f"⚠️ {qe} — تحویل نسخهٔ ناقص با {len(parts)} فصل")
