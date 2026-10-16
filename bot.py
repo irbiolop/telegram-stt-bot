@@ -359,7 +359,17 @@ def register_jz_pending(text: str, title: str, chat_id: int, user_id: int,
 def jz_buttons(token: str):
     return [[Button.inline("📚 تبدیل به جزوه", f"jz:{token}".encode())],
             [Button.inline("✍️ جزوه با پرامپت دلخواه", f"jzp:{token}".encode())],
-            [Button.inline("🤖 جزوه با ایجنت رایگان", f"jza:{token}".encode())]]
+            [Button.inline("🤖 جزوهٔ ویژه رایگان", f"jza:{token}".encode())]]
+
+
+def _clean_err(s: str) -> str:
+    """حذف جزئیات زیرساختی از پیام خطا پیش از نمایش به کاربر"""
+    s = (s or "")
+    s = re.sub(r"https?://\S+", "", s)          # هر آدرسی حذف شود
+    s = s.replace("GitHub ", "").replace("api.github.com", "سرویس ساخت")
+    s = s.replace("/repos/irbiolop/telegram-stt-bot", "").replace("github", "سرویس ساخت")
+    s = s.replace("GitHuB", "سرویس ساخت").replace("GitHub", "سرویس ساخت")
+    return s.strip()
 
 
 # =========================================================
@@ -650,7 +660,7 @@ async def _run_agent_job(job_id: str, info: dict):
             info["mid"] = True
             asyncio.ensure_future(safe_edit(
                 status,
-                "🤖 ایجنت هنوز در حال ساخت جزوه است (بیش از ۴ دقیقه)...\n"
+                "🤖 هنوز در حال ساخت جزوهٔ شما هستیم (بیش از ۴ دقیقه)...\n"
                 "متن‌های طولانی معمولاً ۵ تا ۱۰ دقیقه زمان می‌برد؛ صبور باشید."))
 
     err = ""
@@ -674,8 +684,8 @@ async def _run_agent_job(job_id: str, info: dict):
         if len(markup.split()) < 40:
             await safe_edit(
                 status,
-                "خروجی ایجنت بسیار کوتاه بود؛ ساخت جزوه با ایجنت کامل نشد.\n"
-                "دکمه‌های زیر متن ترنسکریپت همچنان فعال‌اند — «تبدیل به جزوه» معمولی را امتحان کنید.",
+                "ساخت جزوهٔ ویژه کامل نشد؛ خروجی کوتاهی تولید شد.\n"
+                "دکمه‌های زیر متن ترنسکریپت فعال‌اند — «تبدیل به جزوه» معمولی را امتحان کنید.",
                 parse_mode=None,
             )
             admin_log(f"⚠️ جزوهٔ ایجنت خروجی کوتاه | مدل: {info['model']} | user={info['user_id']}")
@@ -699,33 +709,33 @@ async def _run_agent_job(job_id: str, info: dict):
                     pdf_path = cand
             except Exception as pe:
                 log.warning(f"⚠️ PDF ایجنت ناموفق (فقط HTML): {pe}")
-            cap = f"جزوه «{title}» — ایجنت ({info['model_label']})"
+            cap = f"جزوه «{title}» — نسخهٔ ویژه ({info['model_label']})"
             if pdf_path:
                 await client.send_file(chat_id, pdf_path, force_document=True,
                                        caption=cap + " — PDF")
             await client.send_file(chat_id, html_path, force_document=True,
                                    caption=cap + " — در هر مرورگری قابل بازکردن است")
-            await safe_edit(status, "جزوهٔ ایجنت آماده و ارسال شد ✅")
+            await safe_edit(status, "جزوه آماده و ارسال شد ✅")
             admin_log(f"🤖 جزوهٔ ایجنت ارسال شد: «{title[:60]}» | مدل: {info['model']} | "
                       f"زمان: {fmt_seconds(time.time() - info['t0'])} | user={info['user_id']}")
         except Exception as e:
             log.exception(f"❌ خطای رندر جزوهٔ ایجنت: {e}")
-            await safe_edit(status, f"خروجی ایجنت آمد ولی آماده‌سازی فایل‌ها خطا داد:\n{str(e)[:200]}",
+            await safe_edit(status, f"آماده‌سازی فایل‌های جزوه خطا داد:\n{str(e)[:200]}",
                             parse_mode=None)
         finally:
             shutil.rmtree(out_dir, ignore_errors=True)
         return
 
     if res and not res.get("ok"):
-        detail = str(res.get("error") or "")[:300]
+        detail = _clean_err(str(res.get("error") or ""))[:300]
     elif err:
-        detail = err[:300]
+        detail = _clean_err(err)[:300]
     else:
-        detail = "پاسخی از ایجنت دریافت نشد (زمان انتظار تمام شد)."
+        detail = "پاسخی از سرویس ساخت دریافت نشد (زمان انتظار تمام شد)."
     kb = jz_buttons(register_jz_pending(info["text"], info["title"], chat_id, info["user_id"]))
     try:
         await status.edit(
-            "🤖 ساخت جزوه با ایجنت ناموفق بود:\n" + detail +
+            "ساخت جزوهٔ ویژه ناموفق بود:\n" + detail +
             "\n\nمتن محفوظ است — دوباره امتحان کنید یا از «تبدیل به جزوه» معمولی استفاده کنید.",
             parse_mode=None, buttons=kb,
         )
@@ -1350,8 +1360,8 @@ async def start_handler(event):
         "پس از هر تبدیل، زیر متن سه دکمه نمایش داده می‌شود:\n"
         "• «تبدیل به جزوه» — همان متن به جزوه‌ای مرتب و تیتربندی‌شده همراه جدول، نمودار و نقشهٔ ذهنی (PDF) تبدیل می‌شود.\n"
         "• «جزوه با پرامپت دلخواه» — دستور خودتان را می‌نویسید و جزوه طبق همان دستور ساخته می‌شود.\n"
-        "• «جزوه با ایجنت رایگان» — ایجنت OpenCode روی GitHub Actions بالا می‌آید، کل متن را می‌خواند و "
-        "جزوهٔ یکپارچه می‌سازد؛ مدل رایگان را خودتان انتخاب می‌کنید.\n\n"
+        "• «جزوهٔ ویژه رایگان» — هوش مصنوعی کل متن را چند بار مرور می‌کند، طرح کلی می‌چیند و "
+        "جزوه‌ای کامل، منسجم و یکپارچه می‌نویسد؛ مدل ساخت را خودتان انتخاب می‌کنید.\n\n"
         "/status — وضعیت ربات\n"
         "/cancel — لغو تنظیم یا پردازش\n"
         "/jozve — ساخت خودکار جزوه پس از هر تبدیل (روشن/خاموش)"
@@ -1621,20 +1631,20 @@ async def jz_agent_start_handler(event):
         await event.answer("جزوه در حال ساخت است؛ لطفاً شکیبا باشید.", alert=True)
         return
     if gh is None or not gh.available():
-        await event.answer("ایجنت هنوز روی سرور تنظیم نشده است (GH_TOKEN).", alert=True)
+        await event.answer("این قابلیت فعلاً در دسترس نیست؛ بعداً دوباره امتحان کنید.", alert=True)
         return
     models = _agent_models()
     if not models:
-        await event.answer("مدل رایگانی در دسترس نیست؛ کلید تامین‌کننده تنظیم نشده است.", alert=True)
+        await event.answer("فعلاً مدلی در دسترس نیست؛ بعداً دوباره امتحان کنید.", alert=True)
         return
     if len((data.get("text") or "").split()) < 60:
         await event.answer("متن برای ساخت جزوه بسیار کوتاه است.", alert=True)
         return
     await event.answer()
     await event.edit(
-        "🤖 جزوه با «ایجنت» ساخته می‌شود: روی GitHub Actions یک ماشین بالا می‌آید، ایجنت OpenCode "
-        "کل متن را می‌خواند، طرح کلی می‌چیند، جزوهٔ کامل و یکپارچه می‌نویسد و بعد ماشین خاموش می‌شود.\n\n"
-        "با کدام مدل رایگان ساخته شود؟\n"
+        "🤖 «جزوهٔ ویژه» با کیفیت بالاتر ساخته می‌شود: هوش مصنوعی کل متن را چند بار مرور می‌کند، "
+        "طرح کلی می‌چیند و جزوه‌ای کامل، منسجم و یکپارچه می‌نویسد.\n\n"
+        "با کدام مدل ساخته شود؟\n"
         "(برای متن‌های طولانی، مدل با کانتکست بزرگ‌تر پیشنهاد می‌شود)",
         parse_mode=None,
         buttons=agent_model_buttons(token),
@@ -1643,10 +1653,10 @@ async def jz_agent_start_handler(event):
 
 @client.on(events.CallbackQuery(pattern=r"^cxjz:"))
 async def jz_agent_cancel_handler(event):
-    """انصراف از انتخاب مدل ایجنت"""
+    """انصراف از انتخاب مدل"""
     await event.answer("لغو شد.")
     await event.edit(
-        "انتخاب مدل ایجنت لغو شد؛ دکمه‌های زیر متن ترنسکریپت همچنان فعال‌اند.",
+        "لغو شد؛ دکمه‌های زیر متن ترنسکریپت همچنان فعال‌اند.",
         parse_mode=None, buttons=Button.clear(),
     )
 
@@ -1676,26 +1686,26 @@ async def jz_model_pick_handler(event):
         return
     model = models[idx]
     if gh is None or not gh.available():
-        await event.answer("ایجنت روی سرور تنظیم نشده است.", alert=True)
+        await event.answer("این قابلیت فعلاً در دسترس نیست.", alert=True)
         return
     data["busy"] = True
     try:
-        await event.answer("در حال بالا آوردن ایجنت روی گیت‌هاب...")
+        await event.answer("در حال شروع ساخت جزوه...")
     except Exception:
         pass
     job_id = uuid.uuid4().hex[:10]
     branch = f"agent-job-{job_id}"
     status = await event.edit(
-        f"🤖 در حال ساخت جزوه با ایجنت...\nمدل: {model['label']}\n\n"
-        "ماشین ساخت روی GitHub Actions بالا می‌آید؛ معمولاً ۳ تا ۸ دقیقه زمان می‌برد "
-        "(متن‌های خیلی طولانی تا ۱۵ دقیقه). همین پیام به‌روز می‌شود.",
+        f"🤖 در حال ساخت جزوهٔ ویژه...\nمدل: {model['label']}\n\n"
+        "معمولاً ۳ تا ۸ دقیقه زمان می‌برد (متن‌های خیلی طولانی تا ۱۵ دقیقه). "
+        "همین پیام به‌روز می‌شود.",
         parse_mode=None, buttons=None,
     )
     try:
         await asyncio.to_thread(gh.start_agent_job, data["text"], model["id"], job_id, branch)
     except gh.GhError as e:
         data["busy"] = False
-        await safe_edit(status, f"آغاز ایجنت ممکن نشد:\n{str(e)[:250]}\n\nمتن محفوظ است — دوباره امتحان کنید.")
+        await safe_edit(status, f"شروع ساخت ممکن نشد:\n{_clean_err(str(e))[:250]}\n\nمتن محفوظ است — دوباره امتحان کنید.")
         admin_log(f"⚠️ آغاز ایجنت ناموفق: {str(e)[:150]} | user={data['user_id']}")
         return
     info = {"token": token, "chat_id": data["chat_id"], "user_id": data["user_id"],
@@ -2265,6 +2275,8 @@ async def banned_support_handler(event):
 #  سرور سلامت (Health Server) — برای Hugging Face Spaces
 # =========================================================
 HEALTH_PORT = int(os.getenv("HEALTH_PORT") or os.getenv("PORT") or "7860")   # HF: 7860 | Render: متغیر PORT | ۰ = خاموش
+import hashlib as _hashlib
+_agent_key = _hashlib.sha256(BOT_TOKEN.encode()).hexdigest()[:12]   # کلید endpoint تشخیصی ادمین
 _health_started = False
 
 
@@ -2328,6 +2340,11 @@ def start_health_server():
                     self.wfile.write(body)
                     return
                 if path == "/agent-status":
+                    q = (self.path.split("?", 1)[1] if "?" in self.path else "")
+                    if q != f"key={_agent_key}":
+                        self.send_response(404)
+                        self.end_headers()
+                        return
                     agent = {
                         "gh_configured": bool(gh is not None and gh.available()),
                         "models": [m.get("id") for m in _agent_models()],
@@ -2352,6 +2369,7 @@ def start_health_server():
         threading.Thread(target=server.serve_forever, daemon=True).start()
         _health_started = True
         log.info(f"🩺 سرور سلامت روی پورت {HEALTH_PORT} فعال شد (برای پینگ ضدخواب)")
+        log.info(f"📊 وضعیت ایجنت (فقط ادمین): /agent-status?key={_agent_key}")
     except Exception as e:
         log.warning(f"⚠️ سرور سلامت راه نیفتاد (روی کامپیوتر شخصی مهم نیست): {e}")
 
