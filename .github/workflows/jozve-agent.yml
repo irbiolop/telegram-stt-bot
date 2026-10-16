@@ -2,6 +2,11 @@ name: jozve-agent
 
 # 🤖 ایجنت جزوه — با repository_dispatch از ربات بالا می‌آید، جزوه را می‌سازد
 # و output.md را روی همان شاخهٔ موقت کامیت می‌کند؛ سپس ماشین خاموش می‌شود.
+#
+# کانفیگ opencode.json از jozve_models.json ساخته می‌شود (منبع واحد حقیقت).
+# مدل‌های تامین‌کننده‌های پشتیبان پیش از اجرا با endpoint /models خودشان بررسی
+# می‌شوند تا مدل‌های بازنشسته (مثل llama-3.3-70b) دیگر جور شغلتان را نبهالند.
+# اگر مدل انتخابی شکست بخورد، یک‌بار با مدل پیش‌فرض (اولویت: زن ← گمینی ← …) تلاش می‌شود.
 on:
   repository_dispatch:
     types: [jozve-job]
@@ -16,7 +21,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 19
     steps:
       - name: Checkout job branch
         uses: actions/checkout@v4
@@ -31,72 +36,172 @@ jobs:
           npm install -g opencode-ai@latest --silent
           opencode --version
 
-      - name: Write opencode config (providers with available keys)
+      - name: Prepare opencode config from jozve_models.json
         env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json, os
-          prov = {}
-          def add(pid, name, base, envk, models, headers=None, npm_pkg="@ai-sdk/openai-compatible"):
-              if not os.getenv(envk):
-                  return
-              opts = {"apiKey": "{env:%s}" % envk}
-              if base:
-                  opts["baseURL"] = base
-              p = {"npm": npm_pkg, "name": name,
-                   "options": opts, "models": models}
-              if headers:
-                  p["headers"] = headers
-              prov[pid] = p
-          add("gemini-free", "Gemini", None, "GEMINI_API_KEY", {
-                  os.getenv("GEMINI_MODEL", "gemini-3.8-flash"):
-                      {"name": "Gemini Flash",
-                       "limit": {"context": 1000000, "output": 65536}},
-              },
-              npm_pkg="@ai-sdk/google")
-          add("groq-free", "Groq",
-              "https://api.groq.com/openai/v1", "GROQ_API_KEY", {
-                  "gpt-oss-120b": {"name": "GPT-OSS 120B",
-                                   "limit": {"context": 131072, "output": 32768}},
-                  "llama-3.3-70b-versatile": {"name": "Llama 3.3 70B",
-                                              "limit": {"context": 131072, "output": 32768}},
-              })
-          add("openrouter-free", "OpenRouter",
-              "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", {
-                  "nvidia/nemotron-3-ultra-550b-a55b:free": {"name": "Nemotron 3 Ultra 550B"},
-              },
-              headers={"HTTP-Referer": "https://github.com/irbiolop/telegram-stt-bot",
-                       "X-Title": "telegram-stt-bot-agent"})
+          import json, os, urllib.request
+
+          models_cfg = json.load(open("jozve_models.json", encoding="utf-8"))
+          provs = models_cfg.get("providers") or {}
+          models = models_cfg.get("models") or []
+
+          def env_key(name):
+              return (os.getenv(name or "") or "").strip()
+
+          def fetch_live(url, key):
+              """فهرست زندهٔ مدل‌های تامین‌کننده — خطا ← None (مدل‌ها حذف نمی‌شوند)"""
+              if not url or not key:
+                  return None
+              try:
+                  req = urllib.request.Request(
+                      url, headers={"Authorization": "Bearer " + key,
+                                    "User-Agent": "jozve-agent"})
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      data = json.load(r).get("data", [])
+                  return {m.get("id") for m in data if m.get("id")}
+              except Exception as e:
+                  print("verify skip:", type(e).__name__, str(e)[:120])
+                  return None
+
+          def in_live(mid, live):
+              if mid in live:
+                  return True
+              # گمینی گاهی شناسه‌ها را با پیشوند models/ می‌دهد
+              if mid.startswith("models/") and mid[7:] in live:
+                  return True
+              return ("models/" + mid) in live
+
+          # ترتیب تامین‌کننده‌ها بر اساس ترتیب مدل‌های فایل
+          prov_order = []
+          for m in models:
+              pid = m.get("provider") or ""
+              if pid and pid not in prov_order:
+                  prov_order.append(pid)
+
+          conf_provs = {}
+          for pid in prov_order:
+              spec = provs.get(pid) or {}
+              if not spec:
+                  continue
+              key = env_key(spec.get("env"))
+              if spec.get("native"):
+                  # سرویس رسمی OpenCode Zen — بومیِ CLI؛ فقط احراز هویت
+                  if key:
+                      auth_dir = os.path.expanduser("~/.local/share/opencode")
+                      os.makedirs(auth_dir, exist_ok=True)
+                      with open(os.path.join(auth_dir, "auth.json"), "w",
+                                encoding="utf-8") as f:
+                          json.dump({"opencode": {"type": "api", "key": key}}, f)
+                      print("zen: auth.json نوشته شد ✓")
+                  else:
+                      print("zen: کلید OPENCODE_API_KEY تنظیم نشده")
+                  continue
+              if not key:
+                  print("skip provider (کلید ندارد):", pid)
+                  continue
+              pm = [m for m in models if (m.get("provider") or "") == pid]
+              live = fetch_live(spec.get("verify"), key)
+              if live is not None:
+                  keep = [m for m in pm if in_live(m["id"], live)]
+                  dropped = [m["id"] for m in pm if m not in keep]
+                  if dropped:
+                      print("حذف شد (مدل بازنشسته):", ", ".join(dropped))
+                  pm = keep
+              if not pm:
+                  print("skip provider (مدل زنده‌ای ندارد):", pid)
+                  continue
+              mm = {}
+              for m in pm:
+                  entry = {"name": m.get("label") or m["id"]}
+                  lim = {}
+                  if m.get("ctx"):
+                      lim["context"] = int(m["ctx"])
+                  if m.get("out"):
+                      lim["output"] = int(m["out"])
+                  if lim:
+                      entry["limit"] = lim
+                  mm[m["id"].split("/", 1)[1]] = entry
+              opts = {"apiKey": "{env:%s}" % spec.get("env")}
+              if spec.get("baseURL"):
+                  opts["baseURL"] = spec["baseURL"]
+              pe = {"npm": spec.get("npm") or "@ai-sdk/openai-compatible",
+                    "name": spec.get("label") or pid,
+                    "options": opts, "models": mm}
+              if spec.get("headers"):
+                  pe["headers"] = spec["headers"]
+              conf_provs[pid] = pe
+
+          # مدل پیش‌فرض برای تلاش مجدد: اولویت زن ← بقیه به ترتیب فایل
+          default = ""
+          if env_key("OPENCODE_API_KEY"):
+              for m in models:
+                  if (m.get("provider") or "") == "opencode":
+                      default = m["id"]
+                      break
+          if not default:
+              for pid in prov_order:
+                  if pid in conf_provs:
+                      default = [m["id"] for m in models
+                                 if (m.get("provider") or "") == pid][0]
+                      break
+
           cfg = {"$schema": "https://opencode.ai/config.json",
                  "autoupdate": False,
-                 "permission": {"edit": "allow", "bash": "allow", "webfetch": "allow"},
-                 "provider": prov}
+                 "permission": {"edit": "allow", "bash": "allow", "webfetch": "allow"}}
+          if conf_provs:
+              cfg["provider"] = conf_provs
           with open("opencode.json", "w", encoding="utf-8") as f:
               json.dump(cfg, f, ensure_ascii=False, indent=2)
-          print("providers:", ", ".join(prov) or "(none!)")
+          print("providers:", ", ".join(conf_provs) or "(فقط زن/هیچ)")
+          print("default model:", default or "NONE")
+          with open(os.environ.get("GITHUB_ENV", "/tmp/gh_env"), "a",
+                    encoding="utf-8") as f:
+              f.write("DEFAULT_MODEL=%s\n" % default)
           PY
 
       - name: Run opencode agent
         env:
           JOB: ${{ github.event.client_payload.job_id }}
           MODEL: ${{ github.event.client_payload.model }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           set -euo pipefail
-          echo "job=$JOB model=$MODEL"
+          echo "job=$JOB model=$MODEL default=${DEFAULT_MODEL:-}"
           TASK=$(printf '%s' "وظیفهٔ تو ساخت یک جزوهٔ درسی کامل است.
           ۱) فایل jozve_prompt.md را کامل بخوان؛ این سند، دستورالعمل رسمی ساخت جزوه است و باید دقیقاً و بدون کوتاهی اجرا شود.
           ۲) متن خام رونویسی در agent-jobs/$JOB/input.txt قرار دارد.
           ۳) کل متن را چند بار مرور کن، یک طرح کلی (فهرست فصل‌ها) بساز و جزوهٔ کامل و یکپارچه را طبق jozve_prompt.md بنویس.
           ۴) خروجی نهایی را در agent-jobs/$JOB/output.md ذخیره کن — فقط این یک فایل؛ هیچ فایل دیگری نساز.
           ۵) زبان جزوه حتماً فارسی روان است. هیچ بخشی از متن ورودی نباید بدون پوشش بماند و خروجی نباید کوتاه‌تر از حد لازم باشد.")
-          opencode run --auto -m "$MODEL" --title "jozve-$JOB" "$TASK"
+          run_oc() {
+            opencode run --auto -m "$1" --title "$2" "$TASK" </dev/null 2>&1 | tee /tmp/oc.log
+          }
+          OUT="agent-jobs/$JOB/output.md"
+          if ! run_oc "$MODEL" "jozve-$JOB"; then
+            if [ -n "${DEFAULT_MODEL:-}" ] && [ "$MODEL" != "$DEFAULT_MODEL" ]; then
+              echo "::warning::مدل $MODEL ناموفق بود — تلاش مجدد با $DEFAULT_MODEL"
+              run_oc "$DEFAULT_MODEL" "jozve-$JOB-fb"
+            else
+              tail -c 600 /tmp/oc.log || true
+              exit 1
+            fi
+          fi
+          if [ ! -s "$OUT" ]; then
+            echo "::warning::output.md توسط ایجنت نوشته نشد — خروجی استاندارد جایگزین می‌شود"
+            grep -vE '^(opencode v|>|[0-9]{4}-[0-9]{2}-[0-9]{2}T)' /tmp/oc.log > "$OUT" || true
+            sed -i '1{/^```/d};${/^```$/d}' "$OUT" || true
+          fi
+          [ -s "$OUT" ] || { echo "::error::هیچ خروجی‌ای تولید نشد"; exit 1; }
+          echo "خروجی: $(wc -c < "$OUT") بایت"
 
       - name: Commit agent output
         if: success()
