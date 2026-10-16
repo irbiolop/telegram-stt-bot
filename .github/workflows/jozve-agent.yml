@@ -193,6 +193,14 @@ jobs:
               f.write("DEFAULT_MODEL=%s\n" % default)
           PY
 
+      - name: Install PDF toolchain + Persian font
+        run: |
+          set -euo pipefail
+          pip install --quiet weasyprint
+          mkdir -p ~/.local/share/fonts
+          cp fonts/*.ttf ~/.local/share/fonts/ 2>/dev/null || true
+          fc-cache -f >/dev/null 2>&1 || true
+
       - name: Run opencode agent
         env:
           JOB: ${{ github.event.client_payload.job_id }}
@@ -205,15 +213,16 @@ jobs:
           set -euo pipefail
           echo "job=$JOB model=$MODEL default=${DEFAULT_MODEL:-}"
           TASK=$(printf '%s' "وظیفهٔ تو ساخت یک جزوهٔ درسی کامل است.
-          ۱) فایل jozve_prompt.md را کامل بخوان؛ این سند، دستورالعمل رسمی ساخت جزوه است و باید دقیقاً و بدون کوتاهی اجرا شود.
-          ۲) متن خام رونویسی در agent-jobs/$JOB/input.txt قرار دارد.
-          ۳) کل متن را چند بار مرور کن، یک طرح کلی (فهرست فصل‌ها) بساز و جزوهٔ کامل و یکپارچه را طبق jozve_prompt.md بنویس.
-          ۴) خروجی نهایی را در agent-jobs/$JOB/output.md ذخیره کن — فقط این یک فایل؛ هیچ فایل دیگری نساز.
+          ۱) فایل jozve_prompt.md را کامل بخوان؛ این سند، دستورالعمل رسمی ساخت جزوه است و باید دقیقاً و بدون کوتاهی اجرا شود (قالب خروجی: یک سند HTML کامل و مستقل).
+          ۲) متن خام رونویسی در agent-jobs/$JOB/input.txt قرار دارد و استایل الزامی (پالت رنگی و دستور مدیر) در agent-jobs/$JOB/style.json است — style_block آن را کلمه‌به‌کلمه اجرا کن.
+          ۳) کل متن را چند بار مرور کن، طرح کلی بچین و جزوهٔ کامل و یکپارچه را طبق jozve_prompt.md بنویس و در agent-jobs/$JOB/output.html ذخیره کن — فقط همین یک فایل.
+          ۴) پس از ذخیرهٔ output.html، با bash این فرمان را اجرا کن تا PDF ساخته شود: python3 -m weasyprint agent-jobs/$JOB/output.html agent-jobs/$JOB/output.pdf
           ۵) زبان جزوه حتماً فارسی روان است. هیچ بخشی از متن ورودی نباید بدون پوشش بماند و خروجی نباید کوتاه‌تر از حد لازم باشد.")
           run_oc() {
             opencode run --auto -m "$1" --title "$2" "$TASK" </dev/null 2>&1 | tee /tmp/oc.log
           }
-          OUT="agent-jobs/$JOB/output.md"
+          HTMLF="agent-jobs/$JOB/output.html"
+          PDFF="agent-jobs/$JOB/output.pdf"
           if ! run_oc "$MODEL" "jozve-$JOB"; then
             if [ -n "${DEFAULT_MODEL:-}" ] && [ "$MODEL" != "$DEFAULT_MODEL" ]; then
               echo "::warning::مدل $MODEL ناموفق بود — تلاش مجدد با $DEFAULT_MODEL"
@@ -223,13 +232,16 @@ jobs:
               exit 1
             fi
           fi
-          if [ ! -s "$OUT" ]; then
-            echo "::warning::output.md توسط ایجنت نوشته نشد — خروجی استاندارد جایگزین می‌شود"
-            grep -vE '^(opencode v|>|[0-9]{4}-[0-9]{2}-[0-9]{2}T)' /tmp/oc.log > "$OUT" || true
-            sed -i '1{/^```/d};${/^```$/d}' "$OUT" || true
+          if [ ! -s "$HTMLF" ]; then
+            echo "::warning::output.html توسط ایجنت نوشته نشد — استخراج از خروجی استاندارد"
+            grep -vE '^(opencode v|>|[0-9]{4}-[0-9]{2}-[0-9]{2}T)' /tmp/oc.log > "$HTMLF" || true
           fi
-          [ -s "$OUT" ] || { echo "::error::هیچ خروجی‌ای تولید نشد"; exit 1; }
-          echo "خروجی: $(wc -c < "$OUT") بایت"
+          [ -s "$HTMLF" ] || { echo "::error::هیچ خروجی‌ای تولید نشد"; exit 1; }
+          # اگر خود ایجنت PDF نساخته بود، همین‌جا ساخته می‌شود (تور ایمنی)
+          if [ ! -s "$PDFF" ]; then
+            python3 -m weasyprint "$HTMLF" "$PDFF" || echo "::warning::تبدیل PDF ناموفق بود — فقط HTML کامیت می‌شود"
+          fi
+          echo "خروجی: html=$(wc -c < "$HTMLF") بایت$( [ -s "$PDFF" ] && echo ", pdf=$(wc -c < "$PDFF") بایت" )"
 
       - name: Commit agent output
         if: success()
