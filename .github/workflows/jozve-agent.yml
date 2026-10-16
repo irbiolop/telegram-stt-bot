@@ -223,17 +223,25 @@ jobs:
           }
           HTMLF="agent-jobs/$JOB/output.html"
           PDFF="agent-jobs/$JOB/output.pdf"
-          # فهرست همهٔ مدل‌های کانفیگ‌شده — برای تلاش جایگزین وقتی مدل اصلی (مثلاً با سهمیهٔ تمام‌شده) جواب نداد
+          # فهرست مدل‌ها برای تلاش جایگزین: اول مدل‌های زن (سرویس رسمی — بومیِ CLI)،
+          # بعد مدل‌های کانفیگ‌شدهٔ opencode.json به ترتیب فایل
           ALL_MODELS=$(python3 - <<'PY'
-          import json
+          import json, os
+          out = []
+          try:
+              cat = json.load(open("jozve_models.json", encoding="utf-8"))
+              for m in cat.get("models") or []:
+                  if (m.get("provider") or "") == "opencode":
+                      out.append(m["id"])
+          except Exception:
+              pass
           try:
               cfg = json.load(open("opencode.json", encoding="utf-8"))
+              for pid, p in (cfg.get("provider") or {}).items():
+                  for mk in (p.get("models") or {}):
+                      out.append(pid + "/" + mk)
           except Exception:
-              raise SystemExit
-          out = []
-          for pid, p in (cfg.get("provider") or {}).items():
-              for mk in (p.get("models") or {}):
-                  out.append(pid + "/" + mk)
+              pass
           print("\n".join(out))
           PY
           )
@@ -249,13 +257,9 @@ jobs:
             while IFS= read -r m; do
               [ -n "$m" ] || continue
               [ "$m" = "$MODEL" ] && continue
-              if [ -n "${DEFAULT_MODEL:-}" ] && [ "$m" = "$DEFAULT_MODEL" ]; then continue; fi
               echo "::warning::تلاش با مدل جایگزین: $m"
               if try_model "$m" "alt"; then break; fi
             done <<< "$ALL_MODELS"
-            if [ ! -s "$HTMLF" ] && [ -n "${DEFAULT_MODEL:-}" ] && [ "$MODEL" != "$DEFAULT_MODEL" ]; then
-              try_model "$DEFAULT_MODEL" "fb" || true
-            fi
           fi
           if [ ! -s "$HTMLF" ]; then
             echo "::warning::output.html توسط ایجنت نوشته نشد — استخراج از خروجی استاندارد"
