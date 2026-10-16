@@ -69,13 +69,44 @@ jobs:
                   print("verify skip:", type(e).__name__, str(e)[:120])
                   return None
 
-          def in_live(mid, live):
-              if mid in live:
-                  return True
-              # گمینی گاهی شناسه‌ها را با پیشوند models/ می‌دهد
-              if mid.startswith("models/") and mid[7:] in live:
-                  return True
-              return ("models/" + mid) in live
+          def in_live(mid, live, pid=""):
+              """تطبیق چندشکلی شناسه: کامل، بدون پیشوند تامین‌کننده، با/بدون models/ (گمینی)
+              نکته: شناسهٔ openrouter خودش «/» دارد (nvidia/...) — پس فقط پیشوندِ
+              خود تامین‌کنندهٔ کانفیگ حذف می‌شود، نه بیشتر."""
+              cands = [mid]
+              if pid and mid.startswith(pid + "/"):
+                  cands.append(mid[len(pid) + 1:])
+              for c in list(cands):
+                  if c.startswith("models/"):
+                      cands.append(c[7:])
+              for c in cands:
+                  if c in live or ("models/" + c) in live:
+                      return True
+              return False
+
+          def build_provider(pid, pm):
+              """ساخت ورودی تامین‌کننده برای opencode.json از فهرست مدل‌های pm"""
+              spec = provs.get(pid) or {}
+              mm = {}
+              for m in pm:
+                  entry = {"name": m.get("label") or m["id"]}
+                  lim = {}
+                  if m.get("ctx"):
+                      lim["context"] = int(m["ctx"])
+                  if m.get("out"):
+                      lim["output"] = int(m["out"])
+                  if lim:
+                      entry["limit"] = lim
+                  mm[m["id"].split("/", 1)[1]] = entry
+              opts = {"apiKey": "{env:%s}" % spec.get("env")}
+              if spec.get("baseURL"):
+                  opts["baseURL"] = spec["baseURL"]
+              pe = {"npm": spec.get("npm") or "@ai-sdk/openai-compatible",
+                    "name": spec.get("label") or pid,
+                    "options": opts, "models": mm}
+              if spec.get("headers"):
+                  pe["headers"] = spec["headers"]
+              return pe
 
           # ترتیب تامین‌کننده‌ها بر اساس ترتیب مدل‌های فایل
           prov_order = []
@@ -107,35 +138,32 @@ jobs:
                   continue
               pm = [m for m in models if (m.get("provider") or "") == pid]
               live = fetch_live(spec.get("verify"), key)
-              if live is not None:
-                  keep = [m for m in pm if in_live(m["id"], live)]
+              # prune فقط وقتی فهرست زندهٔ غیرخالی گرفتیم — خطا/لیست خالی یعنی نگه‌دار
+              if live:
+                  keep = [m for m in pm if in_live(m["id"], live, pid)]
                   dropped = [m["id"] for m in pm if m not in keep]
                   if dropped:
                       print("حذف شد (مدل بازنشسته):", ", ".join(dropped))
                   pm = keep
+              elif live is not None:
+                  print("هشدار: فهرست زندهٔ", pid, "خالی بود — همهٔ مدل‌ها نگه داشته شدند")
               if not pm:
                   print("skip provider (مدل زنده‌ای ندارد):", pid)
                   continue
-              mm = {}
-              for m in pm:
-                  entry = {"name": m.get("label") or m["id"]}
-                  lim = {}
-                  if m.get("ctx"):
-                      lim["context"] = int(m["ctx"])
-                  if m.get("out"):
-                      lim["output"] = int(m["out"])
-                  if lim:
-                      entry["limit"] = lim
-                  mm[m["id"].split("/", 1)[1]] = entry
-              opts = {"apiKey": "{env:%s}" % spec.get("env")}
-              if spec.get("baseURL"):
-                  opts["baseURL"] = spec["baseURL"]
-              pe = {"npm": spec.get("npm") or "@ai-sdk/openai-compatible",
-                    "name": spec.get("label") or pid,
-                    "options": opts, "models": mm}
-              if spec.get("headers"):
-                  pe["headers"] = spec["headers"]
-              conf_provs[pid] = pe
+              conf_provs[pid] = build_provider(pid, pm)
+
+          if not conf_provs:
+              # تور ایمنی: هیچ تامین‌کننده‌ای از prune جان نبرد — با کلیدهای موجود
+              # همهٔ مدل‌های فایل را بدون بررسی زنده بساز تا ایجنت همیشه قابل اجرا باشد
+              print("!! هیچ تامین‌کنندهٔ زنده‌ای نماند — ساخت بدون فیلتر بازنشستگی")
+              for pid in prov_order:
+                  spec = provs.get(pid) or {}
+                  if not spec or spec.get("native"):
+                      continue
+                  if env_key(spec.get("env")):
+                      pm = [m for m in models if (m.get("provider") or "") == pid]
+                      if pm:
+                          conf_provs[pid] = build_provider(pid, pm)
 
           # مدل پیش‌فرض برای تلاش مجدد: اولویت زن ← بقیه به ترتیب فایل
           default = ""
@@ -224,3 +252,4 @@ jobs:
           git add "agent-jobs/${{ github.event.client_payload.job_id }}" || true
           git commit -m "jozve error: ${{ github.event.client_payload.job_id }}" || echo "nothing to commit"
           git push origin "HEAD:${{ github.event.client_payload.branch }}" || true
+
