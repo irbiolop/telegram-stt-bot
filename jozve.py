@@ -1487,3 +1487,256 @@ def render_progress(info: dict) -> str:
     if st == "pdf":
         return "در حال ساخت فایل PDF..."
     return "در حال کار روی جزوه..."
+
+
+# =========================================================
+#  جزوهٔ HTML مستقیم — خودِ مدل، سند کامل و قشنگ HTML را یکجا می‌سازد
+#  (روش فصل‌بندیِ سمت ربات کنار گذاشته شد؛ زنجیرهٔ تامین‌کننده‌ها همان است:
+#   DeepSeek ← Gemini ← Groq ← OpenRouter. اگر خروجی ناقص ماند، ادامه گرفته می‌شود)
+# =========================================================
+
+PALETTES = {
+    "ocean":   {"label": "آبی اقیانوسی",   "accent": "#1565a8", "accent2": "#0e8f7e",
+                "head_bg": "#eaf3fb", "card_bg": "#f5f9fd", "border": "#c9dff0",
+                "quote_bg": "#eef6fc", "hl": "#fff3bf"},
+    "emerald": {"label": "سبز جنگلی",      "accent": "#1e7d46", "accent2": "#5f8f1f",
+                "head_bg": "#eaf6ee", "card_bg": "#f4faf6", "border": "#c4e3d0",
+                "quote_bg": "#eef8f1", "hl": "#fdf3c9"},
+    "violet":  {"label": "بنفش مدرن",      "accent": "#6d28d9", "accent2": "#a8329a",
+                "head_bg": "#f2ecfd", "card_bg": "#f9f6fe", "border": "#ddccf6",
+                "quote_bg": "#f5effe", "hl": "#ffe9f3"},
+    "sunset":  {"label": "غروب گرم",       "accent": "#c2410c", "accent2": "#b91c1c",
+                "head_bg": "#fdf0e7", "card_bg": "#fef8f3", "border": "#f5d3bd",
+                "quote_bg": "#fdf3ec", "hl": "#fff0a8"},
+    "royal":   {"label": "سرمه‌ای شاهانه", "accent": "#1e3a8a", "accent2": "#a16207",
+                "head_bg": "#ebedf9", "card_bg": "#f6f7fc", "border": "#c8cfee",
+                "quote_bg": "#eff1fa", "hl": "#fdeeb0"},
+    "mono":    {"label": "مینیمال خاکستری", "accent": "#374151", "accent2": "#111827",
+                "head_bg": "#f1f2f4", "card_bg": "#f8f9fa", "border": "#d5d8dd",
+                "quote_bg": "#f3f4f6", "hl": "#e8ebee"},
+}
+DEFAULT_PALETTE = "ocean"
+
+
+def palette_info(pid: str) -> dict:
+    return PALETTES.get((pid or "").strip()) or PALETTES[DEFAULT_PALETTE]
+
+
+def style_block_text(pid: str, admin_prompt: str = "") -> str:
+    """بلاک متنی استایل (پالت + اندازه‌های متعادل + دستور مدیر) — در پرامپت هر دو مسیر تزریق می‌شود"""
+    p = palette_info(pid)
+    lines = [
+        "استایل الزامی:",
+        "۱) در <style> متغیرهای CSS زیر را دقیقاً با همین مقادیر در :root تعریف کن و برای رنگ‌آمیزی از همان‌ها استفاده کن:",
+        f":root{{--accent:{p['accent']};--accent2:{p['accent2']};--head-bg:{p['head_bg']};"
+        f"--card-bg:{p['card_bg']};--border:{p['border']};--quote-bg:{p['quote_bg']};--hl:{p['hl']};}}",
+        "۲) پس‌زمینهٔ صفحه سفید؛ رنگ متن #1c2733؛ رنگ تاکید فقط در تیترها، هدر جدول‌ها، کادرها، هایلایت و شماره‌های فصل.",
+        "۳) اندازه‌های متعادل و یکنواخت: body بین 10.5pt و 11.5pt با line-height حدود 1.9؛ h1 حدود 19pt؛ h2 حدود 15pt؛ "
+        "h3 حدود 12.5pt؛ متن جدول‌ها 9.5pt تا 10pt؛ هیچ عنصری نباید غیرعادی بزرگ یا کوچک باشد.",
+        "۴) جدول‌ها با border جمع‌شده و هدرِ var(--head-bg)؛ کادرهای نکته (.box) با پس‌زمینهٔ var(--card-bg) و خطِ "
+        "راستِ ۴پیکسلی var(--accent)؛ نقل‌قول با پس‌زمینهٔ var(--quote-bg)؛ <mark> با var(--hl).",
+        "۵) فونت: font-family:'Vazirmatn',Tahoma,sans-serif — خودم فونت را تأمین می‌کنم؛ هیچ @font-face اضافه نکن.",
+    ]
+    ap = (admin_prompt or "").strip()
+    if ap:
+        lines.append("دستورالعمل ویژهٔ مدیر جزوه (الزامیِ اجرا؛ در تقدم، بلافاصله بعد از قوانین پایه):")
+        lines.append(ap[:1200])
+    return "\n".join(lines)
+
+
+HTML_JOZVE_SYSTEM = """تو «مؤلف جزوه‌های درسی» هستی. ورودی تو متن خام و پرخطای رونویسی گفتار به متن است و خروجی تو یک سند HTML کامل، قشنگ، منسجم و آمادهٔ چاپ است — نه خلاصه و نه یادداشت پراکنده.
+
+قالب خروجی — بدون هیچ استثنا:
+* فقط و فقط یک سند کامل HTML مستقل: با <!DOCTYPE html> شروع و با </html> تمام شود.
+* <html lang="fa" dir="rtl"> و <meta charset="utf-8">؛ همهٔ استایل‌ها داخل یک <style> در <head>؛ هیچ فایل، اسکریپت، CDN یا تصویر بیرونی ممنوع؛ هیچ جاوااسکریپت ممنوع.
+* هرگز از نشانه‌های مارک‌داون (# یا * یا ##) در خروجی استفاده نکن؛ همه‌چیز تگ HTML درست است.
+
+ساختار سند:
+1) <header class="cover"> شامل <h1> عنوان کلی جزوه (از مضمون کل متن) + یک <p class="sub"> معرفی یک‌خطی.
+2) بدنه: چند <section class="chapter"> — مرز فصل‌ها روی تغییر موضوع. هر فصل: <h2> تیتر + پاراگراف معرفی ۲-۳ جمله‌ای + چند <h3> زیربخش به همان ترتیب متن خام.
+3) پایان: فصل «جمع‌بندی پایانی» + جدول «واژه‌نامهٔ اصطلاحات» (اصطلاح ← توضیح یک‌خطی).
+
+قواعد محتوایی (حیاتی):
+* پوشش صددرصدی: متن «خلاصه» نمی‌شود، فقط ویرایش و ساختاردهی می‌شود. هر تعریف، مثال، عدد، نام، مقایسه و نکته باید در جزوه بیاید. حجم جزوه تقریباً هم‌حجم یا بیشتر از متن خام است.
+* ممنوعیت اهمال‌کاری: «و غیره»، «الخ»، «به همین ترتیب»، «...» و جای‌خالی‌گذاری ممنوع. هر فهرست و جدول کامل شود.
+* منع اختراع: هیچ اطلاعات جدیدی که در متن نیست نساز.
+* ویرایش مجاز: حذف کلمات پرکننده، روان‌سازی، رسمی‌سازی محاوره، یکدست‌سازی اصطلاحات در کل سند.
+* اصلاح غلط‌های تایپی رونویسی: نام‌ها و اصطلاحات خراب‌شده را با شکل صحیح و استاندارد بنویس؛ هرگز کلمهٔ خراب را تکرار نکن.
+* زبان: همه‌چیز فارسی روان؛ فقط اصطلاحات تخصصیِ لاتینِ خودِ متن می‌توانند لاتین بمانند. هیچ ایموجی.
+
+عناصر بصری الزامی:
+* مقایسه/طبقه‌بندی دو چیز یا بیشتر → <table class="tbl"> کامل با <thead> و <tbody>.
+* نکته‌های مهم → <div class="box tip"> یا <div class="box warning"> یا <div class="box example"> یا <div class="box summary">، هرکدام با <div class="box-t">عنوان کادر</div> + متن کادر. هر فصل دست‌کم یک جدول یا کادر.
+* جمله‌های کلیدی گوینده → <blockquote>؛ تعریف‌ها و فرمول‌های طلایی → <mark>متن</mark>.
+* روند یا سلسله‌مراتب → فهرست تو در تو <ol>/<ul>؛ چیزهایی که عدد قابل مقایسه دارند → جدول.
+* در هر جا که معنا دارد به فصل قبلی ارجاع طبیعی بده («همان‌طور که دیدیم...») تا سند یکپارچه باشد، نه چند تکهٔ دوخته‌شده.
+
+{STYLE}
+
+اگر از تو خواسته شد «ادامه بده»، دقیقاً از همان نقطه‌ای که قطع شدی ادامهٔ همان سند را بنویس؛ DOCTYPE، <html> و <head> را تکرار نکن و بخش‌های قبلی را از نو ننویس.
+
+خروجی نهایی فقط خودِ سند HTML است — هیچ توضیح، متن اضافه یا بلوک کد اطرافش ننویس."""
+
+
+PRINT_CSS = """
+/* print hygiene — توسط سامانه تزریق می‌شود */
+@page { size: A4; margin: 1.7cm 1.6cm; }
+body { margin: 0 auto; }
+table, .box, blockquote, figure { break-inside: avoid; }
+h1, h2, h3 { break-after: avoid; }
+mark { border-radius: 3px; }
+img, svg { max-width: 100%; }
+"""
+
+
+def _stitch_html_parts(parts: list) -> str:
+    """قطعه‌های ادامه‌دار مدل را به یک سند تبدیل می‌کند؛ هدر تکراری حذف می‌شود"""
+    doc = (parts[0] or "").strip()
+    for nxt in parts[1:]:
+        t = (nxt or "").strip()
+        if not t:
+            continue
+        low = t.lower()
+        if "<!doctype" in low or "<html" in low:
+            b = low.find("<body")
+            if b != -1:
+                gt = t.find(">", b)
+                t = t[gt + 1:] if gt != -1 else t[b:]
+        doc = re.sub(r"(</body\s*>\s*)?(</html\s*>)?\s*$", "", doc, flags=re.I).rstrip()
+        doc += "\n" + t
+    lowdoc = doc.lower()
+    if "</body>" not in lowdoc:
+        doc += "\n</body>"
+    if "</html>" not in lowdoc:
+        doc += "\n</html>"
+    return doc
+
+
+def _finalize_jozve_html(doc: str) -> str:
+    """تضمین doctype/head/charset/راست‌به‌چپ + تزریق فونت و CSS چاپ"""
+    d = (doc or "").strip()
+    if not re.match(r"^<!doctype\s+html|^<html", d, re.I):
+        d = '<!DOCTYPE html>\n<html lang="fa" dir="rtl">\n' + d
+    if "dir=" not in d[:120].lower():
+        d = re.sub(r"<html(\s[^>]*)?>", '<html lang="fa" dir="rtl">', d, count=1, flags=re.I)
+    inject = ""
+    if "<meta charset" not in d.lower():
+        inject += '<meta charset="utf-8"/>'
+    inject += "<style>\n" + _font_face_css() + PRINT_CSS + "\n</style>"
+    low = d.lower()
+    if "</head>" in low:
+        i = low.index("</head>")
+        d = d[:i] + inject + d[i:]
+    else:
+        m = re.search(r"<html[^>]*>", d, re.I)
+        if m:
+            d = d[:m.end()] + "\n<head>" + inject + "</head>" + d[m.end():]
+        else:
+            d = inject + d
+    if "</html>" not in d.lower():
+        d += "\n</html>"
+    return d
+
+
+def _extract_html_title(doc: str, fallback: str = "") -> str:
+    for pat in (r"<title>(.*?)</title>", r"<h1[^>]*>(.*?)</h1>"):
+        m = re.search(pat, doc or "", re.S | re.I)
+        if m and m.group(1).strip():
+            return re.sub(r"<[^>]+>", "", m.group(1)).strip()[:100]
+    return fallback
+
+
+def produce_jozve_html(text: str, display_name: str, out_dir: str, progress=None,
+                       admin_prompt: str = "", palette: str = "", max_parts: int = 4) -> dict:
+    """روش جدید: خود مدل از روی متن، جزوهٔ کامل HTML را مستقیم می‌سازد.
+    خروجی همان قرارداد produce_jozve است تا bot.py بدون تغییر ساختاری کار کند."""
+    def _p(info):
+        if progress:
+            try:
+                progress(info)
+            except Exception:
+                pass
+
+    _p({"stage": "plan"})
+    style = style_block_text(palette, admin_prompt)
+    sys_prompt = HTML_JOZVE_SYSTEM.replace("{STYLE}", style)
+    words = text.split()
+    msgs = [
+        {"role": "system", "content": sys_prompt},
+        {"role": "user", "content":
+            "متن خام رونویسیِ جلسه («" + (display_name or "جزوه")[:80] + "») این است:\n\n"
+            "<<<TRANSCRIPT\n" + text + "\nTRANSCRIPT>>>\n\n"
+            "حالا جزوهٔ کامل HTML را طبق دستورالعمل بساز. خروجی: فقط سند HTML."},
+    ]
+
+    parts, used = [], []
+    quota = False
+    for i in range(max(1, max_parts)):
+        r = _chat(msgs, max_tokens=7500, temperature=0.25, timeout=360)
+        if not r.get("ok"):
+            quota = bool(r.get("quota"))
+            if not parts:
+                return {"ok": False, "error": str(r.get("error") or "پاسخی دریافت نشد"),
+                        "quota": quota}
+            log.warning(f"⚠️ ادامهٔ HTML در قطعهٔ {i + 1} ناموفق بود — با همین ادامه می‌دهم: "
+                        f"{str(r.get('error'))[:120]}")
+            break
+        parts.append(r["text"])
+        used.append(str(r.get("model") or ""))
+        _p({"stage": "section", "section": i + 1, "total": max_parts,
+            "title": "نوشتن جزوه"})
+        if "</html>" in parts[-1].lower():
+            break
+        msgs.append({"role": "assistant", "content": parts[-1]})
+        msgs.append({"role": "user", "content":
+                     "ادامه بده: دقیقاً از همان‌جا که قطع شدی، ادامهٔ همان سند را بنویس "
+                     "(تکرار ممنوع). اگر سند تمام شده، فقط تگ‌های پایانی را کامل کن."})
+
+    _p({"stage": "render"})
+    doc = _stitch_html_parts(parts)
+    if not doc or "<body" not in doc.lower():
+        return {"ok": False, "error": "خروجی مدل سند HTML معتبر نبود"}
+    doc = _finalize_jozve_html(doc)
+    title = _extract_html_title(doc, (display_name or "جزوه")[:80])
+
+    used_short = list(dict.fromkeys(m.split("/")[-1].replace(":free", "") for m in used if m))
+    provider = ", ".join(used_short)[:70] or "model"
+
+    base = re.sub(r"[^\w\u0600-\u06FF\- ]", "_", display_name)[:50].strip() or "jozve"
+    html_path = os.path.join(out_dir, base + ".html")
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(doc)
+
+    _p({"stage": "pdf"})
+    pdf_path = None
+    try:
+        from weasyprint import HTML as _WHTML  # noqa
+        pdf_path = os.path.join(out_dir, base + ".pdf")
+        _WHTML(string=doc).write_pdf(pdf_path)
+        if os.path.getsize(pdf_path) < 2000:
+            pdf_path = None
+    except Exception as e:
+        log.warning(f"⚠️ ساخت PDF ناموفق (فقط HTML ارسال می‌شود): {e}")
+        pdf_path = None
+
+    _p({"stage": "done"})
+    return {"ok": True, "title": title, "provider": provider,
+            "html": html_path, "pdf": pdf_path,
+            "sections": doc.lower().count("<h2"),
+            "words_in": len(words), "words_out": len(doc.split()),
+            "partial": "", "requests_used": quota_used_today()}
+
+
+def render_progress_html(info: dict) -> str:
+    """پیام وضعیت فارسی برای مسیر HTML مستقیم"""
+    st = info.get("stage")
+    if st == "plan":
+        return "در حال مرور کامل متن و چیدن طرح جزوه..."
+    if st == "section":
+        s, t = int(info.get("section", 1)), int(info.get("total", 4))
+        return f"در حال نوشتن جزوه (بخش {fa_num(min(s, t))} از {fa_num(t)})..."
+    if st == "render":
+        return "در حال نهایی‌سازی سند HTML..."
+    if st == "pdf":
+        return "در حال ساخت فایل PDF..."
+    return "در حال کار روی جزوه..."
