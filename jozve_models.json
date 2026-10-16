@@ -12,7 +12,7 @@
       "env": "GEMINI_API_KEY",
       "npm": "@ai-sdk/google",
       "baseURL": "",
-      "verify": "https://generativelanguage.googleapis.com/v1beta/openai/models"
+      "note": "endpoint فهرست مدل‌ها برای این نوع کلید قابل‌اعتماد نیست (گاهی 400 یا فهرست ناقص) — بررسی زنده خاموش است و مدل همیشه نگه داشته می‌شود"
     },
     "groq-free": {
       "label": "Groq",
@@ -42,7 +42,8 @@
     {"id": "opencode/grok-code", "provider": "opencode", "label": "Grok Code Fast (زن — رایگان)", "ctx": 256000, "out": 256000},
     {"id": "opencode/ling-3.1-flash-free", "provider": "opencode", "label": "Ling 3.1 Flash (زن — رایگان)", "ctx": 262144, "out": 32768},
     {"id": "gemini-free/gemini-3.8-flash", "provider": "gemini-free", "label": "Gemini Flash — کانتکست بزرگ (پشتیبان)", "ctx": 1000000, "out": 65536},
-    {"id": "groq-free/gpt-oss-120b", "provider": "groq-free", "label": "GPT-OSS 120B — سریع (پشتیبان)", "ctx": 131072, "out": 32768},
+    {"id": "groq-free/llama-3.3-70b-versatile", "provider": "groq-free", "label": "Llama 3.3 70B — سریع (پشتیبان)", "ctx": 131072, "out": 32768},
+    {"id": "groq-free/openai/gpt-oss-120b", "provider": "groq-free", "label": "GPT-OSS 120B (پشتیبان)", "ctx": 131072, "out": 32768},
     {"id": "openrouter-free/nvidia/nemotron-3-ultra-550b-a55b:free", "provider": "openrouter-free", "label": "Nemotron Ultra 550B (پشتیبان)", "ctx": 1000000, "out": 128000},
     {"id": "openrouter-free/nvidia/nemotron-3.5-lightning:free", "provider": "openrouter-free", "label": "Nemotron 3.5 Lightning (پشتیبان)", "ctx": 262144, "out": 65536}
   ]
