@@ -137,9 +137,11 @@ def put_file(branch: str, path: str, text: str, message: str = "update") -> str:
 
 
 def get_file(branch: str, path: str):
-    """محتوای متنی فایل از شاخه؛ نبودن ← None (404 عادی است)."""
+    """محتوای متنی فایل از شاخه؛ نبودن ← None (404 عادی است).
+    پارامتر t برای شکستن کشِ مرزی گیت‌هاب — بعد از push، کش ممکن است
+    چند ثانیه 404 قدیمی بدهد؛ ربات هر ۲۰ ثانیه دوباره چک می‌کند."""
     r = _req("GET", f"/repos/{GH_REPO}/contents/{path}", allow_404=True,
-             params={"ref": branch})
+             params={"ref": branch, "t": str(int(time.time() * 1000))})
     if r is None:
         return None
     d = r.json() or {}
