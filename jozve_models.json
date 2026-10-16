@@ -1,13 +1,49 @@
 {
+  "_doc": "فهرست مدل‌های ایجنت جزوه — منبع واحد حقیقت؛ هم ربات و هم ورک‌فلوی Actions از همین فایل کانفیگ opencode.json می‌سازند. تامین‌کنندهٔ opencode = سرویس رسمی OpenCode Zen (مدل‌های رایگان با cost=0 — از models.dev استخراج شده). فیلد verify = endpoint فهرست مدل‌ها برای حذف خودکار مدل‌های بازنشسته.",
   "providers": {
-    "gemini-free": {"label": "Gemini", "env": "GEMINI_API_KEY"},
-    "groq-free": {"label": "Groq", "env": "GROQ_API_KEY"},
-    "openrouter-free": {"label": "OpenRouter", "env": "OPENROUTER_API_KEY"}
+    "opencode": {
+      "label": "OpenCode Zen",
+      "env": "OPENCODE_API_KEY",
+      "native": true,
+      "note": "سرویس رسمی OpenCode؛ به‌صورت بومی داخل CLI هست — فقط کلید لازم دارد (opencode.ai)"
+    },
+    "gemini-free": {
+      "label": "Gemini",
+      "env": "GEMINI_API_KEY",
+      "npm": "@ai-sdk/google",
+      "baseURL": "",
+      "verify": "https://generativelanguage.googleapis.com/v1beta/openai/models"
+    },
+    "groq-free": {
+      "label": "Groq",
+      "env": "GROQ_API_KEY",
+      "npm": "@ai-sdk/openai-compatible",
+      "baseURL": "https://api.groq.com/openai/v1",
+      "verify": "https://api.groq.com/openai/v1/models"
+    },
+    "openrouter-free": {
+      "label": "OpenRouter",
+      "env": "OPENROUTER_API_KEY",
+      "npm": "@ai-sdk/openai-compatible",
+      "baseURL": "https://openrouter.ai/api/v1",
+      "verify": "https://openrouter.ai/api/v1/models",
+      "headers": {
+        "HTTP-Referer": "https://github.com/irbiolop/telegram-stt-bot",
+        "X-Title": "telegram-stt-bot-agent"
+      }
+    }
   },
   "models": [
-    {"id": "gemini-free/gemini-3.8-flash", "provider": "gemini-free", "label": "Gemini Flash — کانتکست بزرگ؛ پیشنهادی برای متن طولانی"},
-    {"id": "groq-free/gpt-oss-120b", "provider": "groq-free", "label": "GPT-OSS 120B — سریع"},
-    {"id": "groq-free/llama-3.3-70b-versatile", "provider": "groq-free", "label": "Llama 3.3 70B — سریع"},
-    {"id": "openrouter-free/nvidia/nemotron-3-ultra-550b-a55b:free", "provider": "openrouter-free", "label": "Nemotron Ultra 550B — کیفیت بالا"}
+    {"id": "opencode/glm-5.3-flash-free", "provider": "opencode", "label": "GLM 5.3 Flash (زن — رایگان)", "ctx": 200000, "out": 32000},
+    {"id": "opencode/deepseek-v4.1-flash-free", "provider": "opencode", "label": "DeepSeek V4.1 Flash (زن — رایگان)", "ctx": 200000, "out": 32000},
+    {"id": "opencode/deepseek-v4-flash-free", "provider": "opencode", "label": "DeepSeek V4 Flash — خروجی بلند (زن — رایگان)", "ctx": 200000, "out": 128000},
+    {"id": "opencode/kimi-k2.5-free", "provider": "opencode", "label": "Kimi K2.5 (زن — رایگان)", "ctx": 262144, "out": 262144},
+    {"id": "opencode/nemotron-3-ultra-free", "provider": "opencode", "label": "Nemotron 3 Ultra — کانتکست ۱M (زن — رایگان)", "ctx": 1000000, "out": 128000},
+    {"id": "opencode/grok-code", "provider": "opencode", "label": "Grok Code Fast (زن — رایگان)", "ctx": 256000, "out": 256000},
+    {"id": "opencode/ling-3.1-flash-free", "provider": "opencode", "label": "Ling 3.1 Flash (زن — رایگان)", "ctx": 262144, "out": 32768},
+    {"id": "gemini-free/gemini-3.8-flash", "provider": "gemini-free", "label": "Gemini Flash — کانتکست بزرگ (پشتیبان)", "ctx": 1000000, "out": 65536},
+    {"id": "groq-free/gpt-oss-120b", "provider": "groq-free", "label": "GPT-OSS 120B — سریع (پشتیبان)", "ctx": 131072, "out": 32768},
+    {"id": "openrouter-free/nvidia/nemotron-3-ultra-550b-a55b:free", "provider": "openrouter-free", "label": "Nemotron Ultra 550B (پشتیبان)", "ctx": 1000000, "out": 128000},
+    {"id": "openrouter-free/nvidia/nemotron-3.5-lightning:free", "provider": "openrouter-free", "label": "Nemotron 3.5 Lightning (پشتیبان)", "ctx": 262144, "out": 65536}
   ]
 }
