@@ -34,17 +34,17 @@
     }
   },
   "models": [
-    {"id": "opencode/glm-5.3-flash-free", "provider": "opencode", "label": "GLM 5.3 Flash (زن — رایگان)", "ctx": 200000, "out": 32000},
-    {"id": "opencode/deepseek-v4.1-flash-free", "provider": "opencode", "label": "DeepSeek V4.1 Flash (زن — رایگان)", "ctx": 200000, "out": 32000},
-    {"id": "opencode/deepseek-v4-flash-free", "provider": "opencode", "label": "DeepSeek V4 Flash — خروجی بلند (زن — رایگان)", "ctx": 200000, "out": 128000},
-    {"id": "opencode/kimi-k2.5-free", "provider": "opencode", "label": "Kimi K2.5 (زن — رایگان)", "ctx": 262144, "out": 262144},
-    {"id": "opencode/nemotron-3-ultra-free", "provider": "opencode", "label": "Nemotron 3 Ultra — کانتکست ۱M (زن — رایگان)", "ctx": 1000000, "out": 128000},
-    {"id": "opencode/grok-code", "provider": "opencode", "label": "Grok Code Fast (زن — رایگان)", "ctx": 256000, "out": 256000},
-    {"id": "opencode/ling-3.1-flash-free", "provider": "opencode", "label": "Ling 3.1 Flash (زن — رایگان)", "ctx": 262144, "out": 32768},
-    {"id": "gemini-free/gemini-3.8-flash", "provider": "gemini-free", "label": "Gemini Flash — کانتکست بزرگ (پشتیبان)", "ctx": 1000000, "out": 65536},
-    {"id": "groq-free/llama-3.3-70b-versatile", "provider": "groq-free", "label": "Llama 3.3 70B — سریع (پشتیبان)", "ctx": 131072, "out": 32768},
-    {"id": "groq-free/openai/gpt-oss-120b", "provider": "groq-free", "label": "GPT-OSS 120B (پشتیبان)", "ctx": 131072, "out": 32768},
-    {"id": "openrouter-free/nvidia/nemotron-3-ultra-550b-a55b:free", "provider": "openrouter-free", "label": "Nemotron Ultra 550B (پشتیبان)", "ctx": 1000000, "out": 128000},
-    {"id": "openrouter-free/nvidia/nemotron-3.5-lightning:free", "provider": "openrouter-free", "label": "Nemotron 3.5 Lightning (پشتیبان)", "ctx": 262144, "out": 65536}
+    {"id": "opencode/glm-5.3-flash-free", "provider": "opencode", "label": "GLM 5.3 Flash (رایگان)", "ctx": 200000, "out": 32000},
+    {"id": "opencode/deepseek-v4.1-flash-free", "provider": "opencode", "label": "DeepSeek V4.1 Flash (رایگان)", "ctx": 200000, "out": 32000},
+    {"id": "opencode/deepseek-v4-flash-free", "provider": "opencode", "label": "DeepSeek V4 Flash — خروجی بلند (رایگان)", "ctx": 200000, "out": 128000},
+    {"id": "opencode/kimi-k2.5-free", "provider": "opencode", "label": "Kimi K2.5 (رایگان)", "ctx": 262144, "out": 262144},
+    {"id": "opencode/nemotron-3-ultra-free", "provider": "opencode", "label": "Nemotron 3 Ultra — کانتکست ۱M (رایگان)", "ctx": 1000000, "out": 128000},
+    {"id": "opencode/grok-code", "provider": "opencode", "label": "Grok Code Fast (رایگان)", "ctx": 256000, "out": 256000},
+    {"id": "opencode/ling-3.1-flash-free", "provider": "opencode", "label": "Ling 3.1 Flash (رایگان)", "ctx": 262144, "out": 32768},
+    {"id": "gemini-free/gemini-3.8-flash", "provider": "gemini-free", "label": "Gemini Flash — کانتکست بزرگ", "ctx": 1000000, "out": 65536},
+    {"id": "groq-free/llama-3.3-70b-versatile", "provider": "groq-free", "label": "Llama 3.3 70B — سریع", "ctx": 131072, "out": 32768},
+    {"id": "groq-free/openai/gpt-oss-120b", "provider": "groq-free", "label": "GPT-OSS 120B", "ctx": 131072, "out": 32768},
+    {"id": "openrouter-free/nvidia/nemotron-3-ultra-550b-a55b:free", "provider": "openrouter-free", "label": "Nemotron Ultra 550B", "ctx": 1000000, "out": 128000},
+    {"id": "openrouter-free/nvidia/nemotron-3.5-lightning:free", "provider": "openrouter-free", "label": "Nemotron 3.5 Lightning", "ctx": 262144, "out": 65536}
   ]
 }
