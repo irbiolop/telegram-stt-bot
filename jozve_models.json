@@ -1,0 +1,13 @@
+{
+  "providers": {
+    "gemini-free": {"label": "Gemini", "env": "GEMINI_API_KEY"},
+    "groq-free": {"label": "Groq", "env": "GROQ_API_KEY"},
+    "openrouter-free": {"label": "OpenRouter", "env": "OPENROUTER_API_KEY"}
+  },
+  "models": [
+    {"id": "gemini-free/flash", "provider": "gemini-free", "label": "Gemini Flash — کانتکست ۱ میلیون؛ پیشنهادی برای جزوهٔ طولانی"},
+    {"id": "groq-free/gpt-oss-120b", "provider": "groq-free", "label": "GPT-OSS 120B روی Groq — سریع، کانتکست ۱۲۸K"},
+    {"id": "groq-free/llama70b", "provider": "groq-free", "label": "Llama 3.3 70B روی Groq — سریع"},
+    {"id": "openrouter-free/nemotron-ultra", "provider": "openrouter-free", "label": "Nemotron 3 Ultra 550B روی OpenRouter — کیفیت بالا"}
+  ]
+}
