@@ -68,8 +68,14 @@ SESSION_NAME = os.getenv("SESSION_NAME", "stt_bot_session")
 JOZVE_AUTO = os.getenv("JOZVE_AUTO", "0") == "1"   # بعد از هر تبدیل «خودکار» جزوه ساخته شود؟ (پیش‌فرض: فقط با دکمه)
 JOZVE_ON = {}                                       # chat_id → True/False (با دستور /jozve)
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7433357700"))  # گزارش ورود/استفادهٔ کاربران به این آیدی تلگرام
+ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", str(ADMIN_ID)).split(",") if x.strip().isdigit()} | {ADMIN_ID}
+SUPPORT_CONTACT = os.getenv("SUPPORT_CONTACT", "").strip()   # نمایش در پیام به کاربران بن‌شده (مثل @username)
 
 MAX_TEXT_IN_CHAT = 3500  # بالاتر از این مقدار، متن به‌صورت فایل txt فرستاده می‌شود
+
+# --- جزوه از فایل متنی/PDF ---
+DOC_MAX_MB = int(os.getenv("DOC_MAX_MB", "25"))          # سقف حجم فایل متنی/PDF ورودی
+DOC_TEXT_MAX = int(os.getenv("DOC_TEXT_MAX", "600000"))  # سقف حروف متن استخراج‌شده
 
 # --- تنظیم هر تبدیل: انتخاب زبان + حذف قطعات (گام‌به‌گام با دکمه) ---
 # زبان‌های قابل انتخاب هنگام ارسال فایل (کد گوگل ← نام نمایشی)
@@ -105,6 +111,13 @@ logging.basicConfig(
     handlers=[logging.FileHandler("bot.log", encoding="utf-8"), logging.StreamHandler()],
 )
 log = logging.getLogger("STT-Bot")
+
+# --- پل گیت‌هاب: ایجنت جزوه + ذخیرهٔ پایدار بن (اختیاری — بدون GH_TOKEN غیرفعال می‌ماند) ---
+try:
+    import gh_agent as gh
+except Exception as _ghe:
+    gh = None
+    log.warning(f"⚠️ ماژول gh_agent بارگذاری نشد؛ ایجنت جزوه غیرفعال می‌ماند: {_ghe}")
 
 # ================== ماژول جزوه‌ساز (اختیاری — فایل jozve.py) ==================
 try:
@@ -165,10 +178,10 @@ def safe_filename(name: str) -> str:
     return re.sub(r"[^\w\u0600-\u06FF\- ]", "_", name).strip() or "voice"
 
 
-async def safe_edit(msg, text: str):
+async def safe_edit(msg, text: str, **kw):
     """ویرایش امن پیام وضعیت — خطاهای لحظه‌ای (مثل «پیام بدون تغییر») نادیده گرفته می‌شود"""
     try:
-        await msg.edit(text)
+        await msg.edit(text, **kw)
     except Exception:
         pass
 
@@ -212,6 +225,121 @@ async def user_label(event) -> str:
         return f"id={getattr(event, 'sender_id', '?')}"
 
 
+# =========================================================
+#  سیستم بن کاربران (فقط ادمین) + انتقال پیام به پشتیبانی
+#  ذخیرهٔ پایدار: secret gist (دیسک Render بعد از هر دیپلوی خالی می‌شود)
+# =========================================================
+BANNED_FILE = "banned.json"
+BANNED_GIST_ID = os.getenv("BANNED_GIST_ID", "").strip()
+BANNED_GIST_FILE = "banned_gist_id.txt"
+banned_ids: set = set()
+_ban_warned = {}          # msg_id → ts — هر پیام فقط یک بار هشدار «بن» بگیرد
+_support_last = {}        # user_id → ts — حداکثر یک پیام پشتیبانی در ۱۰ دقیقه
+
+
+def is_banned(user_id) -> bool:
+    return user_id in banned_ids
+
+
+def is_admin(user_id) -> bool:
+    return user_id in ADMIN_IDS
+
+
+def _read_local_gist_id() -> str:
+    try:
+        with open(BANNED_GIST_FILE, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+
+def _write_local_gist_id(gid: str):
+    try:
+        with open(BANNED_GIST_FILE, "w", encoding="utf-8") as f:
+            f.write(gid)
+    except Exception:
+        pass
+
+
+def _load_banned():
+    """بارگذاری بن‌شده‌ها: gist منبع اصلی است؛ اگر gist در دسترس نبود فایل محلی."""
+    global BANNED_GIST_ID
+    ids = set()
+    try:
+        with open(BANNED_FILE, "r", encoding="utf-8") as f:
+            ids = {int(x) for x in json.load(f)}
+    except Exception:
+        pass
+    if gh is not None and gh.available():
+        gid = BANNED_GIST_ID or _read_local_gist_id()
+        content = gh.gist_read(gid) if gid else None
+        if content is not None:
+            try:
+                ids = {int(x) for x in json.loads(content)}
+            except Exception:
+                pass
+            if gid and gid != BANNED_GIST_ID:
+                BANNED_GIST_ID = gid
+        elif ids:
+            # gist گم شده — با دادهٔ محلی بازسازی می‌شود
+            new = gh.gist_create(json.dumps(sorted(ids)))
+            if new:
+                BANNED_GIST_ID = new
+                _write_local_gist_id(new)
+                log.info(f"🧩 gist بن‌شده‌ها بازسازی شد: {new}")
+    banned_ids.update(ids)
+    if banned_ids:
+        log.info(f"🚫 فهرست بن‌شده‌ها بارگذاری شد: {len(banned_ids)} کاربر")
+
+
+def _save_banned():
+    data = json.dumps(sorted(banned_ids))
+    try:
+        with open(BANNED_FILE, "w", encoding="utf-8") as f:
+            f.write(data)
+    except Exception:
+        pass
+    if gh is None or not gh.available():
+        return
+    global BANNED_GIST_ID
+    gid = BANNED_GIST_ID or _read_local_gist_id()
+    if gid and not gh.gist_write(gid, data):
+        gid = ""   # gist دیگر معتبر نیست — جدید ساخته می‌شود
+    if not gid:
+        gid = gh.gist_create(data) or ""
+        if gid:
+            _write_local_gist_id(gid)
+            BANNED_GIST_ID = gid
+            log.info(f"🧩 gist بن‌شده‌ها ساخته شد: {gid}")
+            admin_log(f"🧩 gist بن‌شده‌ها ساخته شد — برای پایداری بیشتر BANNED_GIST_ID={gid} را در Render ثبت کنید")
+
+
+async def _banned_block(event) -> bool:
+    """اگر کاربر بن باشد True و برای هر پیام فقط یک بار هشدار می‌دهد."""
+    if event.sender_id not in banned_ids:
+        return False
+    mid = getattr(getattr(event, "message", None), "id", 0) or id(event)
+    now = time.time()
+    if _ban_warned.get(mid):
+        return True
+    for k in [k for k, v in _ban_warned.items() if now - v > 900]:
+        _ban_warned.pop(k, None)
+    _ban_warned[mid] = now
+    contact = f"\nپشتیبانی: {SUPPORT_CONTACT}" if SUPPORT_CONTACT else ""
+    try:
+        await event.reply(
+            "⛔ شما در لیست استفاده‌کنندگان این ربات نیستید.\n"
+            "اگر فکر می‌کنید اشتباهی رخ داده، همین‌جا پیام بفرستید تا بررسی شود." + contact,
+            parse_mode=None,
+        )
+    except Exception:
+        pass
+    return True
+
+
+_load_banned()
+
+
 def register_jz_pending(text: str, title: str, chat_id: int, user_id: int,
                         custom_prompt: str = "") -> str:
     """متن آمادهٔ جزوه را در حافظه نگه می‌دارد و توکن دکمه را برمی‌گرداند (عمر: ۴۸ ساعت)"""
@@ -230,7 +358,8 @@ def register_jz_pending(text: str, title: str, chat_id: int, user_id: int,
 
 def jz_buttons(token: str):
     return [[Button.inline("📚 تبدیل به جزوه", f"jz:{token}".encode())],
-            [Button.inline("✍️ جزوه با پرامپت دلخواه", f"jzp:{token}".encode())]]
+            [Button.inline("✍️ جزوه با پرامپت دلخواه", f"jzp:{token}".encode())],
+            [Button.inline("🤖 جزوه با ایجنت رایگان", f"jza:{token}".encode())]]
 
 
 # =========================================================
@@ -461,6 +590,148 @@ async def run_jozve(chat_id: int, text: str, display_name: str, user_id: int = 0
         admin_log(f"⚠️ خطای جزوه | user={user_id}\n{str(e)[:200]}")
     finally:
         shutil.rmtree(out_dir, ignore_errors=True)
+
+
+# =========================================================
+#  جزوه با ایجنت (OpenCode روی GitHub Actions)
+#  ربات شاخهٔ موقت می‌سازد + متن را می‌گذارد + dispatch می‌کند؛
+#  Actions ایجنت را بالا می‌آورد، جزوه را می‌سازد و output.md را کامیت می‌کند؛
+#  ربات نتیجه را می‌خواند، PDF می‌سازد، می‌فرستد و شاخه را پاک می‌کند.
+# =========================================================
+AGENT_MODELS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jozve_models.json")
+AGENT_JOBS = {}   # job_id → اطلاعات job در جریان
+
+
+def agent_available() -> bool:
+    return gh is not None and gh.available() and bool(_agent_models())
+
+
+def _agent_models() -> list:
+    """مدل‌های رایگانِ قابل نمایش — فقط تامین‌کننده‌هایی که کلیدشان روی سرور تنظیم است"""
+    try:
+        with open(AGENT_MODELS_FILE, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception:
+        return []
+    provs = cfg.get("providers") or {}
+    out = []
+    for m in cfg.get("models") or []:
+        p = provs.get(m.get("provider") or "")
+        if not p:
+            continue
+        env_name = p.get("env") or ""
+        if env_name and not os.getenv(env_name):
+            continue
+        out.append(m)
+    return out
+
+
+def agent_model_buttons(token: str):
+    models = _agent_models()
+    rows = []
+    for i in range(0, len(models), 2):
+        row = []
+        for idx in (i, i + 1):
+            if idx < len(models):
+                row.append(Button.inline("⚡ " + models[idx]["label"][:48],
+                                         f"jzm:{token}:{idx}".encode()))
+        rows.append(row)
+    rows.append([Button.inline("✖️ انصراف", f"cxjz:{token}".encode())])
+    return rows
+
+
+async def _run_agent_job(job_id: str, info: dict):
+    """پس از dispatch: پایش خروجی ایجنت → پاکسازی مارکاپ → HTML/PDF → ارسال → پاککردن شاخه"""
+    chat_id = info["chat_id"]
+    status = info["status"]
+
+    def _tick(elapsed: float):
+        if 240 < elapsed < 260 and not info.get("mid"):
+            info["mid"] = True
+            asyncio.ensure_future(safe_edit(
+                status,
+                "🤖 ایجنت هنوز در حال ساخت جزوه است (بیش از ۴ دقیقه)...\n"
+                "متن‌های طولانی معمولاً ۵ تا ۱۰ دقیقه زمان می‌برد؛ صبور باشید."))
+
+    err = ""
+    try:
+        res = await asyncio.to_thread(
+            gh.poll_agent_output, job_id, info["branch"], 18 * 60, 20, _tick)
+    except gh.GhError as e:
+        res, err = None, str(e)
+    try:
+        await asyncio.to_thread(gh.cleanup_agent_job, job_id, info["branch"])
+    except Exception:
+        pass
+    AGENT_JOBS.pop(job_id, None)
+
+    if res and res.get("ok"):
+        markup = ""
+        try:
+            markup = jozve._clean_fragment(res["text"])
+        except Exception:
+            markup = (res.get("text") or "").strip()
+        if len(markup.split()) < 40:
+            await safe_edit(
+                status,
+                "خروجی ایجنت بسیار کوتاه بود؛ ساخت جزوه با ایجنت کامل نشد.\n"
+                "دکمه‌های زیر متن ترنسکریپت همچنان فعال‌اند — «تبدیل به جزوه» معمولی را امتحان کنید.",
+                parse_mode=None,
+            )
+            admin_log(f"⚠️ جزوهٔ ایجنت خروجی کوتاه | مدل: {info['model']} | user={info['user_id']}")
+            return
+        m = re.search(r"^#\s+(.+)$", markup, re.M)
+        title = (m.group(1).strip() if m else "") or str(info["title"])[:80]
+        out_dir = tempfile.mkdtemp(prefix="jozve_agent_")
+        try:
+            base = re.sub(r"[^\w\u0600-\u06FF\- ]", "_", str(info["title"]))[:50].strip() or "jozve"
+            html_path = os.path.join(out_dir, base + ".html")
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(jozve.render_html(markup, title=title, source=info["title"], mode="js"))
+            pdf_path = None
+            try:
+                from weasyprint import HTML as _WHTML  # noqa
+                _WHTML(string=jozve.render_html(markup, title=title, source=info["title"],
+                                                mode="img")).write_pdf(
+                    os.path.join(out_dir, base + ".pdf"))
+                cand = os.path.join(out_dir, base + ".pdf")
+                if os.path.exists(cand) and os.path.getsize(cand) >= 2000:
+                    pdf_path = cand
+            except Exception as pe:
+                log.warning(f"⚠️ PDF ایجنت ناموفق (فقط HTML): {pe}")
+            cap = f"جزوه «{title}» — ایجنت ({info['model_label']})"
+            if pdf_path:
+                await client.send_file(chat_id, pdf_path, force_document=True,
+                                       caption=cap + " — PDF")
+            await client.send_file(chat_id, html_path, force_document=True,
+                                   caption=cap + " — در هر مرورگری قابل بازکردن است")
+            await safe_edit(status, "جزوهٔ ایجنت آماده و ارسال شد ✅")
+            admin_log(f"🤖 جزوهٔ ایجنت ارسال شد: «{title[:60]}» | مدل: {info['model']} | "
+                      f"زمان: {fmt_seconds(time.time() - info['t0'])} | user={info['user_id']}")
+        except Exception as e:
+            log.exception(f"❌ خطای رندر جزوهٔ ایجنت: {e}")
+            await safe_edit(status, f"خروجی ایجنت آمد ولی آماده‌سازی فایل‌ها خطا داد:\n{str(e)[:200]}",
+                            parse_mode=None)
+        finally:
+            shutil.rmtree(out_dir, ignore_errors=True)
+        return
+
+    if res and not res.get("ok"):
+        detail = str(res.get("error") or "")[:300]
+    elif err:
+        detail = err[:300]
+    else:
+        detail = "پاسخی از ایجنت دریافت نشد (زمان انتظار تمام شد)."
+    kb = jz_buttons(register_jz_pending(info["text"], info["title"], chat_id, info["user_id"]))
+    try:
+        await status.edit(
+            "🤖 ساخت جزوه با ایجنت ناموفق بود:\n" + detail +
+            "\n\nمتن محفوظ است — دوباره امتحان کنید یا از «تبدیل به جزوه» معمولی استفاده کنید.",
+            parse_mode=None, buttons=kb,
+        )
+    except Exception:
+        pass
+    admin_log(f"⚠️ جزوهٔ ایجنت ناموفق | مدل: {info['model']} | {detail[:180]} | user={info['user_id']}")
 
 
 # =========================================================
@@ -1061,6 +1332,8 @@ async def _run_url_pipeline(st: dict, token: str, url: str):
 # =========================================================
 @client.on(events.NewMessage(incoming=True, pattern=r"^/(start|help)$"))
 async def start_handler(event):
+    if await _banned_block(event):
+        return
     await event.reply(
         "سلام 👋\n"
         "فایل صوتی یا ویدیویی خود را ارسال کنید تا متن آن استخراج شود.\n\n"
@@ -1068,14 +1341,17 @@ async def start_handler(event):
         "• فایل صوتی: mp3 ، m4a ، wav ، ogg ، flac\n"
         "• ویدیو: mp4 ، mkv ، avi — تا ۲ گیگابایت\n"
         "• لینک هم می‌توانید بفرستید: لینک مستقیم فایل، گوگل‌درایو یا صفحهٔ سایت‌های ویدئویی\n"
-        "  (یوتیوب/آپارات و...) — خودم دانلود می‌کنم\n\n"
+        "  (یوتیوب/آپارات و...) — خودم دانلود می‌کنم\n"
+        "• فایل متنی (.txt) یا PDF هم قبول است — مستقیم از رویش جزوه می‌سازم\n\n"
         "پس از ارسال فایل، سه مرحلهٔ کوتاه را طی می‌کنیم:\n"
         "۱) زبان گفتار فایل را انتخاب می‌کنید (فارسی یا انگلیسی)\n"
         "۲) در صورت نیاز، دقیقه‌های حذفی را مشخص می‌کنید تا از تبدیل کنار گذاشته شوند\n"
         "۳) خلاصهٔ تنظیمات را تأیید می‌کنید و تبدیل آغاز می‌شود\n\n"
-        "پس از هر تبدیل، زیر متن دو دکمه نمایش داده می‌شود:\n"
+        "پس از هر تبدیل، زیر متن سه دکمه نمایش داده می‌شود:\n"
         "• «تبدیل به جزوه» — همان متن به جزوه‌ای مرتب و تیتربندی‌شده همراه جدول، نمودار و نقشهٔ ذهنی (PDF) تبدیل می‌شود.\n"
-        "• «جزوه با پرامپت دلخواه» — دستور خودتان را می‌نویسید (مثلاً «فقط نکته‌های امتحانی را استخراج کن») و جزوه طبق همان دستور ساخته می‌شود.\n\n"
+        "• «جزوه با پرامپت دلخواه» — دستور خودتان را می‌نویسید و جزوه طبق همان دستور ساخته می‌شود.\n"
+        "• «جزوه با ایجنت رایگان» — ایجنت OpenCode روی GitHub Actions بالا می‌آید، کل متن را می‌خواند و "
+        "جزوهٔ یکپارچه می‌سازد؛ مدل رایگان را خودتان انتخاب می‌کنید.\n\n"
         "/status — وضعیت ربات\n"
         "/cancel — لغو تنظیم یا پردازش\n"
         "/jozve — ساخت خودکار جزوه پس از هر تبدیل (روشن/خاموش)"
@@ -1158,10 +1434,72 @@ async def jozve_handler(event):
     admin_log(f"⚙️ /jozve {'روشن' if state else 'خاموش'} | {_label}")
 
 
+@client.on(events.NewMessage(incoming=True, pattern=r"^/(ban|unban)\s+(\d{4,})\s*$"))
+async def ban_id_handler(event):
+    """بن/آنبان کاربر با آیدی عددی — فقط ادمین"""
+    if not is_admin(event.sender_id):
+        return
+    action, target = event.pattern_match.group(1), int(event.pattern_match.group(2))
+    if target in ADMIN_IDS and action == "ban":
+        await event.reply("⚠️ نمی‌توان ادمین را بن کرد.")
+        return
+    if action == "ban":
+        banned_ids.add(target)
+        _save_banned()
+        await event.reply(f"🚫 کاربر {target} بن شد و از این پس پیام «در لیست استفاده‌کنندگان نیستید» می‌گیرد.\n"
+                          f"تعداد بن‌شده‌ها: {len(banned_ids)}")
+        admin_log(f"🚫 بن شد: {target} | توسط ادمین")
+    else:
+        if target in banned_ids:
+            banned_ids.discard(target)
+            _save_banned()
+            await event.reply(f"✅ بن کاربر {target} برداشته شد.\nتعداد بن‌شده‌ها: {len(banned_ids)}")
+            admin_log(f"✅ آن‌بن شد: {target} | توسط ادمین")
+        else:
+            await event.reply(f"کاربر {target} در فهرست بن نیست.")
+
+
+@client.on(events.NewMessage(incoming=True, pattern=r"^/ban\s*$"))
+async def ban_reply_handler(event):
+    """بن با ریپلای روی پیام کاربر — فقط ادمین"""
+    if not is_admin(event.sender_id):
+        return
+    try:
+        r = await event.get_reply_message()
+    except Exception:
+        r = None
+    if not r or not r.sender_id:
+        await event.reply("روی پیام کاربر ریپلای کنید یا آیدی عددی بدهید:\n/ban 123456789")
+        return
+    target = r.sender_id
+    if target in ADMIN_IDS:
+        await event.reply("⚠️ نمی‌توان ادمین را بن کرد.")
+        return
+    banned_ids.add(target)
+    _save_banned()
+    await event.reply(f"🚫 کاربر {target} بن شد.\nتعداد بن‌شده‌ها: {len(banned_ids)}")
+    admin_log(f"🚫 بن شد: {target} | توسط ادمین (ریپلای)")
+
+
+@client.on(events.NewMessage(incoming=True, pattern=r"^/banlist\s*$"))
+async def banlist_handler(event):
+    if not is_admin(event.sender_id):
+        return
+    if not banned_ids:
+        await event.reply("فهرست کاربران بن‌شده خالی است.\nبن کردن: /ban <آیدی عددی>")
+        return
+    ids = "، ".join(str(x) for x in sorted(banned_ids)[:100])
+    more = "\n…" if len(banned_ids) > 100 else ""
+    await event.reply(f"🚫 کاربران بن‌شده ({len(banned_ids)} نفر):\n{ids}{more}\n\nحذف از بن: /unban <آیدی>")
+
+
 @client.on(events.CallbackQuery(pattern=r"^jz:"))
 async def jz_button_handler(event):
     """دکمهٔ «تبدیل به جزوه» زیر متن ترنسکریپت"""
     token = (event.data or b"").decode("utf-8", "ignore").split(":", 1)[-1]
+    if event.sender_id in banned_ids:
+        await event.answer("شما در لیست استفاده‌کنندگان این ربات نیستید.", alert=True)
+        return
     data = PENDING_JZ.get(token)
     if not data:
         await event.answer(
@@ -1265,11 +1603,117 @@ async def jz_prompt_go_handler(event):
         data["busy"] = False
 
 
+@client.on(events.CallbackQuery(pattern=r"^jza:"))
+async def jz_agent_start_handler(event):
+    """دکمهٔ «جزوه با ایجنت رایگان» — نمایش لیست مدل‌های رایگان برای انتخاب"""
+    token = (event.data or b"").decode("utf-8", "ignore").split(":", 1)[-1]
+    if event.sender_id in banned_ids:
+        await event.answer("شما در لیست استفاده‌کنندگان این ربات نیستید.", alert=True)
+        return
+    data = PENDING_JZ.get(token)
+    if not data:
+        await event.answer(
+            "این متن دیگر در حافظه موجود نیست؛ فایل را دوباره ارسال و دکمه را بفشارید.",
+            alert=True,
+        )
+        return
+    if data.get("busy"):
+        await event.answer("جزوه در حال ساخت است؛ لطفاً شکیبا باشید.", alert=True)
+        return
+    if gh is None or not gh.available():
+        await event.answer("ایجنت هنوز روی سرور تنظیم نشده است (GH_TOKEN).", alert=True)
+        return
+    models = _agent_models()
+    if not models:
+        await event.answer("مدل رایگانی در دسترس نیست؛ کلید تامین‌کننده تنظیم نشده است.", alert=True)
+        return
+    if len((data.get("text") or "").split()) < 60:
+        await event.answer("متن برای ساخت جزوه بسیار کوتاه است.", alert=True)
+        return
+    await event.answer()
+    await event.edit(
+        "🤖 جزوه با «ایجنت» ساخته می‌شود: روی GitHub Actions یک ماشین بالا می‌آید، ایجنت OpenCode "
+        "کل متن را می‌خواند، طرح کلی می‌چیند، جزوهٔ کامل و یکپارچه می‌نویسد و بعد ماشین خاموش می‌شود.\n\n"
+        "با کدام مدل رایگان ساخته شود؟\n"
+        "(برای متن‌های طولانی، مدل با کانتکست بزرگ‌تر پیشنهاد می‌شود)",
+        parse_mode=None,
+        buttons=agent_model_buttons(token),
+    )
+
+
+@client.on(events.CallbackQuery(pattern=r"^cxjz:"))
+async def jz_agent_cancel_handler(event):
+    """انصراف از انتخاب مدل ایجنت"""
+    await event.answer("لغو شد.")
+    await event.edit(
+        "انتخاب مدل ایجنت لغو شد؛ دکمه‌های زیر متن ترنسکریپت همچنان فعال‌اند.",
+        parse_mode=None, buttons=Button.clear(),
+    )
+
+
+@client.on(events.CallbackQuery(pattern=r"^jzm:"))
+async def jz_model_pick_handler(event):
+    """انتخاب مدل ← آغاز job ایجنت روی GitHub Actions"""
+    try:
+        _, token, idx_s = (event.data or b"").decode("utf-8", "ignore").split(":", 2)
+        idx = int(idx_s)
+    except ValueError:
+        await event.answer("دادهٔ دکمه نامعتبر است.", alert=True)
+        return
+    if event.sender_id in banned_ids:
+        await event.answer("شما در لیست استفاده‌کنندگان این ربات نیستید.", alert=True)
+        return
+    data = PENDING_JZ.get(token)
+    if not data:
+        await event.answer("این متن دیگر در حافظه موجود نیست؛ فایل را دوباره ارسال کنید.", alert=True)
+        return
+    if data.get("busy"):
+        await event.answer("جزوه در حال ساخت است؛ لطفاً شکیبا باشید.", alert=True)
+        return
+    models = _agent_models()
+    if not (0 <= idx < len(models)):
+        await event.answer("این مدل دیگر موجود نیست؛ دوباره انتخاب کنید.", alert=True)
+        return
+    model = models[idx]
+    if gh is None or not gh.available():
+        await event.answer("ایجنت روی سرور تنظیم نشده است.", alert=True)
+        return
+    data["busy"] = True
+    try:
+        await event.answer("در حال بالا آوردن ایجنت روی گیت‌هاب...")
+    except Exception:
+        pass
+    job_id = uuid.uuid4().hex[:10]
+    branch = f"agent-job-{job_id}"
+    status = await event.edit(
+        f"🤖 در حال ساخت جزوه با ایجنت...\nمدل: {model['label']}\n\n"
+        "ماشین ساخت روی GitHub Actions بالا می‌آید؛ معمولاً ۳ تا ۸ دقیقه زمان می‌برد "
+        "(متن‌های خیلی طولانی تا ۱۵ دقیقه). همین پیام به‌روز می‌شود.",
+        parse_mode=None, buttons=None,
+    )
+    try:
+        await asyncio.to_thread(gh.start_agent_job, data["text"], model["id"], job_id, branch)
+    except gh.GhError as e:
+        data["busy"] = False
+        await safe_edit(status, f"آغاز ایجنت ممکن نشد:\n{str(e)[:250]}\n\nمتن محفوظ است — دوباره امتحان کنید.")
+        admin_log(f"⚠️ آغاز ایجنت ناموفق: {str(e)[:150]} | user={data['user_id']}")
+        return
+    info = {"token": token, "chat_id": data["chat_id"], "user_id": data["user_id"],
+            "branch": branch, "model": model["id"], "model_label": model["label"],
+            "title": data["title"], "text": data["text"], "status": status,
+            "t0": time.time(), "mid": False}
+    AGENT_JOBS[job_id] = info
+    admin_log(f"🤖 درخواست جزوهٔ ایجنت — «{data['title'][:40]}» | مدل: {model['id']} | user={data['user_id']}")
+    asyncio.create_task(_run_agent_job(job_id, info))
+
+
 @client.on(events.NewMessage(incoming=True))
 async def media_handler(event):
     """پذیرش فایل صوتی/تصویری → آغاز تنظیم گام‌به‌گام (زبان ← حذفیات ← تأیید)"""
     msg = event.message
     if not msg.media or (msg.text or "").startswith("/"):
+        return
+    if await _banned_block(event):
         return
 
     file = msg.file
@@ -1316,6 +1760,98 @@ async def media_handler(event):
     )
 
 
+def _extract_doc_text(path: str, mime: str) -> str:
+    """استخراج متن از PDF (pypdf) یا فایل متنی (با حدس انکودینگ برای فارسی)"""
+    if mime == "application/pdf" or path.lower().endswith(".pdf"):
+        try:
+            from pypdf import PdfReader
+        except Exception:
+            raise ValueError("کتابخانهٔ خواندن PDF (pypdf) روی سرور نصب نیست؛ فایل متنی بفرستید.")
+        reader = PdfReader(path)
+        pages = []
+        for p in reader.pages:
+            try:
+                pages.append(p.extract_text() or "")
+            except Exception:
+                pages.append("")
+        return "\n".join(pages)
+    raw = open(path, "rb").read()
+    for enc in ("utf-8-sig", "utf-8", "cp1256", "latin-1"):
+        try:
+            return raw.decode(enc)
+        except Exception:
+            continue
+    return raw.decode("utf-8", "replace")
+
+
+@client.on(events.NewMessage(incoming=True))
+async def doc_handler(event):
+    """پذیرش فایل متنی (.txt و...) و PDF → استخراج متن → دکمه‌های جزوه (بدون تبدیل صوت)"""
+    msg = event.message
+    if not msg.media or (msg.text or "").startswith("/"):
+        return
+    if await _banned_block(event):
+        return
+    file = msg.file
+    if file is None or not event.is_private:
+        return
+    mime = (file.mime_type or "").lower()
+    ext = (file.ext or "").lower()
+    is_pdf = mime == "application/pdf" or ext == ".pdf"
+    is_txt = mime.startswith("text/") or mime in ("application/json",)
+    if not (is_pdf or is_txt):
+        return
+    size_mb = (file.size or 0) / (1024 * 1024)
+    if size_mb > DOC_MAX_MB:
+        await event.reply(
+            f"حجم فایل {size_mb:.0f} مگابایت است؛ سقف فایل متنی/PDF: {DOC_MAX_MB} مگابایت.",
+            parse_mode=None,
+        )
+        return
+
+    status = await event.reply("در حال خواندن فایل و استخراج متن...", parse_mode=None)
+    tmp_dir = tempfile.mkdtemp(prefix="stt_doc_")
+    try:
+        path = os.path.join(tmp_dir, "doc" + (ext or ".bin"))
+        await msg.download_media(file=path)
+        text = await asyncio.to_thread(_extract_doc_text, path, mime)
+        text = re.sub(r"\r\n", "\n", (text or "")).strip()
+        note = ""
+        if len(text) > DOC_TEXT_MAX:
+            text = text[:DOC_TEXT_MAX]
+            note = f"\n\n(متن بسیار طولانی بود؛ به {DOC_TEXT_MAX:,} حرف محدود شد.)"
+        if len(text.split()) < 30:
+            await safe_edit(
+                status,
+                "از این فایل متنی قابل استخراجی پیدا نشد.\n"
+                "اگر PDF اسکن‌شده است (تصویری است)، متنش با این روش قابل خواندن نیست؛\n"
+                "فایل متنی واقعی (.txt) یا PDF متنی بفرستید.",
+                parse_mode=None,
+            )
+            return
+        display_name = file.name or ("سند.pdf" if is_pdf else "سند.txt")
+        token = register_jz_pending(text, display_name, event.chat_id, event.sender_id)
+        _label = await user_label(event)
+        admin_log(f"📄 فایل متنی: «{display_name[:50]}» ({len(text):,} حرف) | از: {_label}")
+        await safe_edit(
+            status,
+            f"متن «{display_name}» استخراج شد ({len(text):,} حرف).{note}\n\n"
+            "جزوه ساخته شود؟ نوع ساخت را انتخاب کنید:",
+            parse_mode=None,
+            buttons=jz_buttons(token),
+        )
+        if "جزوه" in (msg.message or ""):   # کپشن «جزوه» = ساخت خودکار با زنجیرهٔ معمولی
+            asyncio.create_task(run_jozve(event.chat_id, text, display_name, event.sender_id))
+    except ValueError as e:
+        await safe_edit(status, str(e)[:300])
+    except Exception as e:
+        log.exception(f"❌ خطای خواندن فایل متنی: {e}")
+        await safe_edit(status, f"خواندن این فایل ممکن نشد:\n{str(e)[:250]}")
+        admin_log(f"⚠️ خطای فایل متنی | {str(e)[:150]}")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 @client.on(events.NewMessage(incoming=True))
 async def url_handler(event):
     """پذیرش لینک (مستقیم / گوگل‌درایو / صفحهٔ ویدئویی) ← همان تنظیم گام‌به‌گام فایل
@@ -1324,6 +1860,8 @@ async def url_handler(event):
     # ⚠️ پیام حاوی لینک، مدیای MessageMediaWebPage دارد (پیش‌نمایش صفحه) — نباید آن را
     # «فایل» حساب کنیم؛ فقط مدیای واقعی (صوت/ویدئو/عکس و...) را رد می‌کنیم
     if _is_media_only(msg.media) or not event.is_private:
+        return
+    if await _banned_block(event):
         return
     raw = (msg.message or "").strip()
     if not raw or raw.startswith("/"):
@@ -1696,6 +2234,33 @@ async def jz_prompt_text_handler(event):
     )
 
 
+@client.on(events.NewMessage(incoming=True))
+async def banned_support_handler(event):
+    """پیام کاربران بن‌شده به ادمین منتقل می‌شود (تماس با پشتیبانی)"""
+    if not event.is_private or not banned_ids:
+        return
+    if event.sender_id not in banned_ids:
+        return
+    raw = (event.message.message or "").strip()
+    if not raw or raw.startswith("/"):
+        return
+    now = time.time()
+    if now - _support_last.get(event.sender_id, 0) < 600:
+        await event.reply("پیام قبلی‌تان به پشتیبانی رسیده است؛ لطفاً چند دقیقه دیگر دوباره بفرستید.",
+                          parse_mode=None)
+        return
+    _support_last[event.sender_id] = now
+    label = ""
+    try:
+        u = await event.get_sender()
+        label = " ".join(x for x in [getattr(u, "first_name", ""), getattr(u, "last_name", "")] if x).strip()
+    except Exception:
+        pass
+    await notify_admin(
+        f"📨 پیام از کاربر بن‌شده (پشتیبانی):\n{label} | id={event.sender_id}\n\n{raw[:1500]}")
+    await event.reply("پیام شما به پشتیبانی منتقل شد و بررسی می‌شود ✅", parse_mode=None)
+
+
 # =========================================================
 #  سرور سلامت (Health Server) — برای Hugging Face Spaces
 # =========================================================
@@ -1756,6 +2321,20 @@ def start_health_server():
                 path = (self.path or "/").split("?")[0]
                 if path == "/llm-status":
                     body = _json.dumps(_llm_status(), ensure_ascii=False).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                if path == "/agent-status":
+                    agent = {
+                        "gh_configured": bool(gh is not None and gh.available()),
+                        "models": [m.get("id") for m in _agent_models()],
+                        "banned": len(banned_ids),
+                        "admin": list(ADMIN_IDS),
+                    }
+                    body = _json.dumps(agent, ensure_ascii=False).encode("utf-8")
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json; charset=utf-8")
                     self.send_header("Content-Length", str(len(body)))
