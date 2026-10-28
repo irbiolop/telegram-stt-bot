@@ -1,0 +1,1499 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>کروماتوگرافی: از جداسازی مولکول‌ها تا نرم‌کردن آب</title>
+<style>
+:root{
+  --accent:#c2410c;
+  --accent2:#b91c1c;
+  --head-bg:#fdf0e7;
+  --card-bg:#fef8f3;
+  --border:#f5d3bd;
+  --quote-bg:#fdf3ec;
+  --hl:#fff0a8;
+  --text:#1c2733;
+}
+
+@page{
+  size:A4;
+  margin:16mm 15mm 18mm 15mm;
+  @bottom-center{
+    content:counter(page);
+    font-family:'Vazirmatn',Tahoma,sans-serif;
+    font-size:9pt;
+    color:#1c2733;
+    opacity:.65;
+  }
+}
+
+*{box-sizing:border-box}
+html{background:#fff}
+body{
+  margin:0;
+  padding:0;
+  background:#fff;
+  color:var(--text);
+  font-family:'Vazirmatn',Tahoma,sans-serif;
+  font-size:11pt;
+  line-height:1.9;
+}
+.page{max-width:850px;margin:0 auto;padding:0 4px}
+p{margin:0 0 10px;text-align:justify}
+ul,ol{margin:8px 0 12px;padding-right:22px}
+li{margin:0 0 5px}
+b,strong{font-weight:700}
+.ltr{direction:ltr;display:inline-block}
+sub,sup{line-height:0}
+
+h1,h2,h3{line-height:1.55;margin:0;font-weight:700}
+h1{font-size:19pt;color:var(--accent2)}
+h2{font-size:15pt;color:var(--accent)}
+h3{font-size:12.5pt;color:var(--accent2);margin:19px 0 7px}
+
+.cover{
+  position:relative;
+  margin:10px 0 24px;
+  padding:30px 30px 24px;
+  background:var(--card-bg);
+  border:1px solid var(--border);
+  border-radius:24px;
+  overflow:hidden;
+}
+.cover:before{
+  content:"";
+  position:absolute;
+  top:-70px;
+  left:-55px;
+  width:190px;
+  height:190px;
+  border:20px solid var(--head-bg);
+  border-radius:50%;
+}
+.cover:after{
+  content:"";
+  position:absolute;
+  bottom:-85px;
+  right:-55px;
+  width:210px;
+  height:210px;
+  border:18px solid var(--head-bg);
+  border-radius:50%;
+}
+.cover-inner{position:relative;z-index:1}
+.cover-kicker{
+  display:inline-block;
+  background:#fff;
+  border:1px solid var(--border);
+  border-radius:999px;
+  padding:3px 13px;
+  font-size:9.5pt;
+  color:var(--accent2);
+  margin-bottom:12px;
+}
+.cover h1{margin-bottom:8px}
+.cover .sub{
+  font-size:11pt;
+  color:var(--text);
+  opacity:.86;
+  max-width:680px;
+  margin:0;
+  text-align:justify;
+}
+.cover-line{
+  height:4px;
+  width:120px;
+  background:var(--accent);
+  border-radius:999px;
+  margin:18px 0 13px;
+}
+.cover-meta{display:flex;flex-wrap:wrap;gap:7px}
+.cover-meta span{
+  background:#fff;
+  border:1px solid var(--border);
+  border-radius:999px;
+  padding:3px 11px;
+  font-size:9.5pt;
+}
+
+.toc{
+  background:var(--card-bg);
+  border:1px solid var(--border);
+  border-radius:18px;
+  padding:14px 18px;
+  margin:0 0 26px;
+  break-inside:avoid;
+}
+.toc-title{
+  font-size:11pt;
+  font-weight:700;
+  color:var(--accent);
+  margin-bottom:7px;
+}
+.toc-grid{display:flex;flex-wrap:wrap;gap:2px 20px}
+.toc-item{
+  flex:1 1 46%;
+  min-width:250px;
+  font-size:10.2pt;
+  padding:3px 0;
+  border-bottom:1px dotted var(--border);
+}
+.toc-item span{
+  display:inline-block;
+  min-width:23px;
+  color:var(--accent);
+  font-weight:700;
+}
+
+.chapter{margin:30px 0 34px}
+.ch-head{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  border-bottom:2px solid var(--border);
+  padding-bottom:8px;
+  margin-bottom:12px;
+  break-after:avoid;
+}
+.ch-num{
+  flex:0 0 auto;
+  width:36px;
+  height:36px;
+  line-height:36px;
+  text-align:center;
+  background:var(--accent);
+  color:#fff;
+  border-radius:12px;
+  font-size:12pt;
+  font-weight:700;
+}
+.ch-head h2{margin:0}
+
+.box{
+  background:var(--card-bg);
+  border-right:4px solid var(--accent);
+  border-radius:14px;
+  padding:11px 15px;
+  margin:14px 0;
+  break-inside:avoid;
+}
+.box-t{
+  color:var(--accent);
+  font-weight:700;
+  font-size:10.5pt;
+  margin-bottom:4px;
+}
+.box.warning .box-t{color:var(--accent2)}
+.box.summary{background:var(--head-bg)}
+.box p:last-child,.box ul:last-child,.box ol:last-child{margin-bottom:0}
+
+blockquote{
+  margin:15px 0;
+  padding:12px 16px;
+  background:var(--quote-bg);
+  border-right:4px solid var(--accent2);
+  border-radius:13px;
+  color:var(--text);
+  font-weight:600;
+  break-inside:avoid;
+}
+blockquote p{margin:0;text-align:justify}
+
+mark{
+  background:var(--hl);
+  color:var(--text);
+  padding:0 4px;
+  border-radius:3px;
+}
+
+.table-wrap{
+  border:1px solid var(--border);
+  border-radius:13px;
+  overflow:hidden;
+  margin:14px 0;
+  break-inside:avoid;
+}
+.table-wrap.breakable{break-inside:auto}
+.table-wrap.breakable table.tbl{break-inside:auto}
+.table-wrap.breakable thead{display:table-header-group}
+table.tbl{
+  width:100%;
+  border-collapse:collapse;
+  table-layout:fixed;
+  font-size:9.6pt;
+  line-height:1.7;
+}
+.tbl th,.tbl td{
+  border-bottom:1px solid var(--border);
+  padding:7px 9px;
+  vertical-align:top;
+  overflow-wrap:break-word;
+}
+.tbl thead th{
+  background:var(--head-bg);
+  color:var(--accent2);
+  font-weight:700;
+  text-align:right;
+}
+.tbl tbody tr:last-child td{border-bottom:none}
+.tbl tbody tr:nth-child(even){background:#fff}
+.tbl tbody tr:nth-child(odd){background:var(--card-bg)}
+.tbl.center td,.tbl.center th{text-align:center}
+
+.formula{
+  direction:ltr;
+  text-align:center;
+  background:var(--head-bg);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:10px 12px;
+  margin:13px 0;
+  font-size:13.5pt;
+  font-weight:700;
+  color:var(--accent2);
+  break-inside:avoid;
+}
+.formula-fa{direction:rtl;font-size:11.5pt;line-height:1.9}
+.formula-note{
+  direction:rtl;
+  font-size:9.6pt;
+  font-weight:400;
+  color:var(--text);
+  margin-top:4px;
+  text-align:center;
+}
+
+.mindmap{
+  background:var(--card-bg);
+  border:1px solid var(--border);
+  border-radius:20px;
+  padding:16px;
+  margin:18px 0 24px;
+  break-inside:avoid;
+}
+.mm-title{
+  text-align:center;
+  font-size:10.5pt;
+  font-weight:700;
+  color:var(--accent);
+  margin-bottom:10px;
+}
+.mm-wrap{text-align:center}
+.mm-center{
+  display:inline-block;
+  background:var(--accent);
+  color:#fff;
+  border-radius:14px;
+  padding:7px 20px;
+  font-weight:700;
+  font-size:11.5pt;
+  margin-bottom:11px;
+}
+.mm-grid{display:flex;flex-wrap:wrap;gap:8px}
+.mm-item{
+  flex:1 1 30%;
+  min-width:160px;
+  background:#fff;
+  border:1px solid var(--border);
+  border-radius:13px;
+  padding:8px 10px;
+  text-align:right;
+  font-size:9.6pt;
+  line-height:1.65;
+}
+.mm-item b{display:block;color:var(--accent);font-size:10.2pt;margin-bottom:2px}
+
+.two-col{display:flex;flex-wrap:wrap;gap:12px;margin:14px 0}
+.mini{
+  flex:1 1 250px;
+  background:#fff;
+  border:1px solid var(--border);
+  border-radius:15px;
+  padding:11px 13px;
+  break-inside:avoid;
+}
+.mini-t{
+  font-size:10.5pt;
+  font-weight:700;
+  color:var(--accent);
+  margin-bottom:5px;
+}
+.mini.polar{border-top:5px solid var(--accent)}
+.mini.nonpolar{border-top:5px solid var(--accent2)}
+.mini p:last-child{margin-bottom:0}
+
+.flow{
+  display:flex;
+  flex-wrap:wrap;
+  gap:4px;
+  align-items:stretch;
+  margin:14px 0;
+  break-inside:avoid;
+}
+.flow-step{
+  flex:1 1 112px;
+  background:var(--head-bg);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:8px 9px;
+  text-align:center;
+  font-size:9.6pt;
+  line-height:1.65;
+}
+.flow-step b{display:block;color:var(--accent);font-size:10.1pt}
+.flow-arrow{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  color:var(--accent);
+  font-size:14pt;
+  padding:0;
+}
+
+.figure{
+  margin:16px 0;
+  padding:12px 14px 10px;
+  background:#fff;
+  border:1px solid var(--border);
+  border-radius:16px;
+  break-inside:avoid;
+}
+.fig-title{
+  font-size:10.5pt;
+  font-weight:700;
+  color:var(--accent);
+  margin-bottom:7px;
+}
+.fig-cap{
+  font-size:9.4pt;
+  line-height:1.7;
+  color:var(--text);
+  opacity:.82;
+  text-align:center;
+  margin-top:6px;
+}
+.chart svg{width:100%;height:auto;display:block}
+.chart-legend{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px 18px;
+  justify-content:center;
+  font-size:9.4pt;
+  margin-top:5px;
+}
+.chart-legend span{display:inline-block}
+
+.tlc-demo{
+  display:flex;
+  gap:20px;
+  align-items:flex-end;
+  justify-content:center;
+  flex-wrap:wrap;
+  margin:8px 0 4px;
+}
+.tlc-tank{
+  position:relative;
+  width:170px;
+  height:232px;
+  border:2px solid var(--border);
+  border-top:none;
+  border-radius:0 0 18px 18px;
+  background:var(--card-bg);
+}
+.tlc-solvent{
+  position:absolute;
+  bottom:0;
+  left:0;
+  right:0;
+  height:38px;
+  background:var(--head-bg);
+  border-top:2px solid var(--accent);
+  border-radius:0 0 16px 16px;
+}
+.tlc-plate{
+  position:absolute;
+  bottom:22px;
+  left:48px;
+  width:74px;
+  height:186px;
+  background:#fff;
+  border:2px solid var(--border);
+  border-radius:4px;
+}
+.tlc-front{
+  position:absolute;
+  top:20px;
+  left:0;
+  right:0;
+  border-top:2px dashed var(--accent);
+}
+.tlc-origin{
+  position:absolute;
+  bottom:31px;
+  left:0;
+  right:0;
+  border-top:1px dashed var(--accent2);
+}
+.spot{
+  position:absolute;
+  width:10px;
+  height:10px;
+  border-radius:50%;
+  background:var(--accent2);
+}
+.spot.a{bottom:36px;right:22px}
+.spot.b{bottom:70px;right:36px}
+.spot.c{bottom:105px;right:26px}
+.spot.d{bottom:136px;right:40px}
+.tlc-side{flex:1 1 250px;min-width:230px}
+.leg-row{
+  display:flex;
+  gap:8px;
+  align-items:flex-start;
+  font-size:9.6pt;
+  margin:0 0 5px;
+}
+.leg-dot{
+  flex:0 0 auto;
+  width:10px;
+  height:10px;
+  border-radius:50%;
+  background:var(--accent2);
+  margin-top:7px;
+}
+
+.rf-demo{
+  display:flex;
+  gap:22px;
+  align-items:flex-end;
+  justify-content:center;
+  flex-wrap:wrap;
+  margin:8px 0 4px;
+}
+.rf-plate{
+  position:relative;
+  width:132px;
+  height:240px;
+  background:#fff;
+  border:1px solid var(--border);
+  border-radius:5px;
+  margin:0 auto;
+}
+.rf-front{
+  position:absolute;
+  top:22px;
+  left:0;
+  right:0;
+  border-top:2px dashed var(--accent);
+}
+.rf-origin{
+  position:absolute;
+  bottom:30px;
+  left:0;
+  right:0;
+  border-top:2px dashed var(--accent2);
+}
+.rf-spot{
+  position:absolute;
+  bottom:100px;
+  right:59px;
+  width:12px;
+  height:12px;
+  border-radius:50%;
+  background:var(--accent2);
+}
+.rf-spot.second{
+  bottom:150px;
+  right:40px;
+  background:var(--accent);
+}
+.rf-side{flex:1 1 260px;min-width:240px}
+.rf-side p:last-child{margin-bottom:0}
+.rf-tag{
+  display:inline-block;
+  background:var(--head-bg);
+  border:1px solid var(--border);
+  border-radius:999px;
+  padding:2px 9px;
+  font-size:9.2pt;
+  margin:2px 0;
+}
+
+.col-demo{
+  display:flex;
+  gap:26px;
+  align-items:flex-end;
+  justify-content:center;
+  flex-wrap:wrap;
+  margin:10px 0 4px;
+}
+.col-unit{text-align:center;font-size:9.4pt;width:150px}
+.col-glass{
+  position:relative;
+  width:96px;
+  height:232px;
+  margin:0 auto 6px;
+  border:2px solid var(--border);
+  border-radius:10px 10px 18px 18px;
+  background:#fff;
+  overflow:hidden;
+}
+.col-fill{
+  position:absolute;
+  bottom:22px;
+  left:0;
+  right:0;
+  height:158px;
+  background:var(--head-bg);
+  border-top:2px solid var(--border);
+}
+.col-frit{
+  position:absolute;
+  bottom:14px;
+  left:12px;
+  right:12px;
+  height:8px;
+  background:var(--border);
+  border-radius:4px;
+}
+.col-tip{
+  position:absolute;
+  bottom:-2px;
+  left:38px;
+  width:16px;
+  height:17px;
+  background:#fff;
+  border:2px solid var(--border);
+  border-top:none;
+  border-radius:0 0 8px 8px;
+}
+.col-wall{
+  position:absolute;
+  top:44px;
+  bottom:22px;
+  width:9px;
+  background:var(--head-bg);
+  border:1px solid var(--border);
+}
+.col-wall.right{right:0}
+.col-wall.left{left:0}
+.col-label{font-weight:700;color:var(--accent);display:block;margin-top:1px}
+.col-note{font-size:8.9pt;opacity:.82;display:block;line-height:1.55}
+
+.exchange-wrap{
+  break-inside:avoid;
+  margin:12px 0 5px;
+}
+.exchange-table{
+  width:100%;
+  border-collapse:separate;
+  border-spacing:10px 0;
+}
+.exchange-table td{vertical-align:middle;text-align:center}
+.exchange-table td.ex-card{width:43%}
+.ex-card{
+  background:#fff;
+  border:1px solid var(--border);
+  border-radius:15px;
+  padding:10px;
+  text-align:center;
+  font-size:9.5pt;
+}
+.bead{
+  position:relative;
+  display:inline-block;
+  vertical-align:top;
+  width:96px;
+  height:96px;
+  margin:0 0 8px;
+  background:var(--card-bg);
+  border:2px solid var(--border);
+  border-radius:50%;
+}
+.bead .charge{
+  position:absolute;
+  font-size:9pt;
+  font-weight:700;
+  color:var(--accent2);
+}
+.bead .c1{top:10px;right:18px}
+.bead .c2{top:40px;left:13px}
+.bead .c3{bottom:12px;right:20px}
+.ex-arrow{
+  color:var(--accent);
+  font-size:20pt;
+  font-weight:700;
+  padding:0 2px;
+}
+
+.checklist{
+  list-style:none;
+  padding:0;
+  margin:8px 0;
+}
+.checklist li{
+  position:relative;
+  padding-right:20px;
+  margin-bottom:5px;
+}
+.checklist li:before{
+  content:"";
+  position:absolute;
+  right:0;
+  top:8px;
+  width:8px;
+  height:8px;
+  border-radius:50%;
+  background:var(--accent);
+}
+
+
+.closing{display:flex;align-items:center;min-height:236mm;margin:0}
+.closing-inner{width:100%}
+.end-mark{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:12px;
+  margin:20px 0 0;
+  color:var(--accent);
+  font-size:10pt;
+  font-weight:700;
+}
+.end-mark:before,.end-mark:after{
+  content:"";
+  width:74px;
+  height:1px;
+  background:var(--border);
+}
+
+.small{font-size:9.5pt;line-height:1.75}
+.mt0{margin-top:0}
+.center{text-align:center}
+
+@media print{
+  .cover,.toc,.box,.figure,.table-wrap,blockquote{break-inside:avoid}
+  .chapter{break-inside:auto}
+  h2,h3{break-after:avoid}
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="cover">
+  <div class="cover-inner">
+    <div class="cover-kicker">جزوهٔ درس روش‌های جداسازی</div>
+    <h1>کروماتوگرافی: از جداسازی مولکول‌ها تا نرم‌کردن آب</h1>
+    <p class="sub">ویرایش و بازنویسی کامل جلسهٔ درس؛ از تعادل فازی و ضریب توزیع تا فاز نرمال و معکوس، ستون‌ها، خواندن کروماتوگرام، کروماتوگرافی لایه نازک، ستون دستی و کاربرد تبادل یونی در تصفیهٔ آب.</p>
+    <div class="cover-line"></div>
+    <div class="cover-meta">
+      <span>بر پایهٔ رونویسی کامل کلاس</span>
+      <span>شامل نقشهٔ ذهنی و نمودارهای تجسمی</span>
+      <span>سند آموزشی آمادهٔ چاپ</span>
+    </div>
+  </div>
+</header>
+
+<nav class="toc" aria-label="فهرست مطالب">
+  <div class="toc-title">فهرست مطالب</div>
+  <div class="toc-grid">
+    <div class="toc-item"><span>۱</span>چرا کروماتوگرافی؟ مبانی و تعادل</div>
+    <div class="toc-item"><span>۲</span>فاز نرمال، فاز معکوس و ضریب توزیع</div>
+    <div class="toc-item"><span>۳</span>خانوادهٔ کروماتوگرافی بر اساس فاز متحرک</div>
+    <div class="toc-item"><span>۴</span>ستون‌ها: قطبیت، C18 و معماری بستر</div>
+    <div class="toc-item"><span>۵</span>سرعت جریان، کیفیت و هزینه</div>
+    <div class="toc-item"><span>۶</span>خواندن کروماتوگرام</div>
+    <div class="toc-item"><span>۷</span>کروماتوگرافی لایه نازک و کنترل واکنش</div>
+    <div class="toc-item"><span>۸</span>ستون دستی: از دوغاب تا جمع‌آوری</div>
+    <div class="toc-item"><span>۹</span>تبادل یونی و نرم‌کردن آب</div>
+    <div class="toc-item"><span>۱۰</span>جمع‌بندی پایانی و واژه‌نامه</div>
+  </div>
+</nav>
+
+<div class="mindmap">
+  <div class="mm-title">نقشهٔ ذهنی جزوه</div>
+  <div class="mm-wrap">
+    <div class="mm-center">کروماتوگرافی</div>
+    <div class="mm-grid">
+      <div class="mm-item"><b>مبانی</b>اختلاف تمایل، تعادل فیزیکی و حرکت بین دو فاز</div>
+      <div class="mm-item"><b>نظام فازی</b>فاز نرمال با ستون قطبی و فاز معکوس با ستون غیرقطبی</div>
+      <div class="mm-item"><b>ضریب توزیع</b>نسبت غلظت در فاز ساکن به فاز متحرک و معنی K</div>
+      <div class="mm-item"><b>ستون</b>بستر پرشده در برابر پوشش نازک روی دیواره</div>
+      <div class="mm-item"><b>کارایی</b>تعادل سرعت، کیفیت جداسازی و هزینهٔ حلال</div>
+      <div class="mm-item"><b>تشخیص</b>کروماتوگرام، زمان بازداری، Rf و TLC</div>
+      <div class="mm-item"><b>ستون دستی</b>دوغاب، بارگذاری، جریان پیوسته و جمع‌آوری بخش‌ها</div>
+      <div class="mm-item"><b>کاربرد</b>تبادل یونی، نرم‌کردن آب و نقش pH</div>
+    </div>
+  </div>
+</div>
+
+<section class="chapter" id="ch1">
+  <div class="ch-head"><span class="ch-num">۱</span><h2>چرا کروماتوگرافی؟ مبانی و تعادل</h2></div>
+
+  <p>این جلسه با یک پرسش بنیادی آغاز می‌شود: اصلاً کروماتوگرافی از کجا آمد و برای چه به آن نیاز داریم؟ پاسخ کوتاه این است که ما در آزمایشگاه اغلب با مخلوطی از چند ماده روبه‌رو هستیم و می‌خواهیم اجزای آن را از یکدیگر جدا کنیم. کروماتوگرافی یکی از روش‌های جداسازی است و کار خود را نه با تبدیل شیمیایی مواد، بلکه با استفاده از تفاوت رفتار آن‌ها در برابر دو فاز انجام می‌دهد.</p>
+
+  <h3>جداسازی بر پایهٔ اختلاف، نه شباهت</h3>
+  <p>اساس جداسازی در کروماتوگرافی وجود <mark>اختلاف</mark> است. اگر دو ماده رفتار کاملاً یکسانی داشته باشند، هیچ روشی نمی‌تواند آن‌ها را از هم تفکیک کند؛ زیرا هر دو با یک سرعت و به یک شکل حرکت می‌کنند و با هم از ستون خارج می‌شوند. در مقابل، هرچه تفاوت رفتار دو ماده بیشتر باشد، جداسازی آسان‌تر و واضح‌تر است.</p>
+  <p>در این درس واژه‌های «نمونه»، «آنالیت»، «سمپل» و «آنالیز» همه به یک معنا به‌کار می‌روند: ماده‌ای که می‌خواهیم اجزایش را از هم جدا کنیم. بنابراین وقتی گفته می‌شود غلظت نمونه یا غلظت آنالیت، منظور غلظت همان ماده‌ای است که در حال جداسازی آن هستیم.</p>
+  <p>ماده در ستون بین دو فاز تقسیم می‌شود: <b>فاز ساکن</b> که در ستون قرار دارد و <b>فاز متحرک</b> که ماده را با خود می‌برد. هر ماده بر اساس تمایلی که به فاز ساکن دارد، تصمیم می‌گیرد بیشتر در آن فاز بماند یا با فاز متحرک جلو برود. ماده‌ای که بیشتر به فاز ساکن می‌چسبد، دیرتر خارج می‌شود و ماده‌ای که تمایل کمتری دارد، زودتر از ستون بیرون می‌آید.</p>
+
+  <h3>فاز متحرک چه ویژگی‌هایی باید داشته باشد؟</h3>
+  <p>فاز متحرک فقط یک حلال معمولی نیست؛ شرایط مشخصی دارد. اول اینکه نباید با ستون برهم‌کنش مخرب داشته باشد و نباید آن را تخریب کند. دوم اینکه نباید باعث تغییر شیمیایی ماده شود؛ زیرا در کروماتوگرافی قرار نیست ماده واکنش بدهد. سوم اینکه باید از نظر ماهیت و قطبیت با فاز ساکن تفاوت داشته باشد تا ماده بتواند بین دو فاز تقسیم شود. چهارم اینکه می‌تواند گاز یا مایع باشد، اما باید سیال باشد تا حرکت کند. پنجم اینکه باید بتواند نمونه را حل کند؛ ماده‌ای که در فاز متحرک حل نشود، نمی‌تواند مسیر جداسازی را درست طی کند.</p>
+
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr><th style="width:24%">ویژگی فاز متحرک</th><th style="width:43%">توضیح</th><th style="width:33%">اگر رعایت نشود</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>عدم برهم‌کنش مخرب با ستون</td><td>نباید با فاز ساکن واکنش دهد یا آن را از بین ببرد.</td><td>ستون آسیب می‌بیند و جداسازی خراب می‌شود.</td></tr>
+        <tr><td>عدم تغییر شیمیایی</td><td>نباید ماده را تبدیل کند؛ فقط باید آن را حمل کند.</td><td>مادهٔ جدید ساخته می‌شود و نتیجه قابل تفسیر نیست.</td></tr>
+        <tr><td>اختلاف با فاز ساکن</td><td>باید از نظر قطبیت و ماهیت با فاز ساکن متفاوت باشد.</td><td>ماده بین دو فاز تقسیم نمی‌شود و همه با هم حرکت می‌کنند.</td></tr>
+        <tr><td>توان حل‌کردن نمونه</td><td>نمونه باید در فاز متحرک حل شود تا قابل انتقال باشد.</td><td>نمونه در مسیر پخش یا رسوب می‌کند و جداسازی رخ نمی‌دهد.</td></tr>
+        <tr><td>سیال بودن</td><td>فاز متحرک باید گاز یا مایع باشد تا بتواند حرکت کند.</td><td>حرکت و انتقال ماده ممکن نیست.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>تعادل فیزیکی، نه واکنش شیمیایی</h3>
+  <p>در هر نقطه از ستون، مادهٔ موجود در فاز متحرک ممکن است به فاز ساکن بچسبد و مادهٔ موجود در فاز ساکن ممکن است وارد فاز متحرک شود. این دادوستد مداوم ادامه دارد تا در آن نقطه تعادل برقرار شود. این تعادل، یک <mark>تعادل فیزیکی</mark> است؛ ماده مصرف نمی‌شود، به مادهٔ دیگری تبدیل نمی‌شود و واکنش شیمیایی رخ نمی‌دهد. فاز متحرک مانند جریان شست‌وشو عمل می‌کند: ماده را با خود می‌برد، اما بر اساس برهم‌کنش‌ها تصمیم می‌گیرد چه مقدار از آن در فاز ساکن بماند.</p>
+  <p>همین تعادل است که باعث می‌شود ماده در طول ستون حرکت کند. اگر ماده هیچ تمایلی به فاز ساکن نداشت، با فاز متحرک یک‌جا خارج می‌شد؛ اگر تمایل بسیار زیاد داشت، در ابتدای ستون می‌ماند و دیرتر خارج می‌شد. جداسازی زمانی رخ می‌دهد که دو ماده تمایل متفاوتی داشته باشند و در نتیجه با سرعت‌های متفاوت حرکت کنند.</p>
+
+  <div class="flow">
+    <div class="flow-step"><b>۱. تزریق</b>نمونه وارد ستون می‌شود.</div>
+    <div class="flow-arrow">←</div>
+    <div class="flow-step"><b>۲. تقسیم</b>ماده بین فاز ساکن و متحرک پخش می‌شود.</div>
+    <div class="flow-arrow">←</div>
+    <div class="flow-step"><b>۳. حرکت</b>فاز متحرک ماده را در ستون پیش می‌برد.</div>
+    <div class="flow-arrow">←</div>
+    <div class="flow-step"><b>۴. خروج</b>مواد به ترتیب تمایل خارج می‌شوند.</div>
+  </div>
+
+  <div class="box tip">
+    <div class="box-t">نکتهٔ کلیدی</div>
+    <p>کروماتوگرافی یک واکنش شیمیایی نیست؛ یک <b>فرایند جداسازی فیزیکی</b> است. ماده تغییر نمی‌کند، فقط بین دو فاز جابه‌جا می‌شود. اگر دو ماده رفتار مشابهی داشته باشند، حتی با ستون خوب هم به‌سختی جدا می‌شوند.</p>
+  </div>
+
+  <blockquote>
+    <p>اساس جداسازی، اختلاف است: هرچه تمایل دو ماده به فاز ساکن بیشتر تفاوت داشته باشد، جداسازی تمیزتر و سریع‌تر انجام می‌شود.</p>
+  </blockquote>
+</section>
+
+<section class="chapter" id="ch2">
+  <div class="ch-head"><span class="ch-num">۲</span><h2>فاز نرمال، فاز معکوس و ضریب توزیع</h2></div>
+
+  <p>از دل بحث تعادل، دو مفهوم مهم بیرون می‌آید. مفهوم اول به جنس فاز ساکن مربوط است و روش‌ها را به دو خانوادهٔ فاز نرمال و فاز معکوس تقسیم می‌کند. مفهوم دوم، ضریب توزیع است که توضیح می‌دهد یک ماده در یک ستون مشخص چقدر می‌ماند و چه زمانی خارج می‌شود. این دو مفهوم در ادامهٔ درس بارها به کار می‌آیند.</p>
+
+  <h3>فاز نرمال: ستون قطبی</h3>
+  <p>ستون‌هایی که در ابتدا ابداع شدند، فاز ساکن قطبی داشتند. به این روش <b>فاز نرمال</b> می‌گویند. در فاز نرمال، ستون یا فاز ساکن قطبی است و فاز متحرک نسبت به آن قطبیت کمتری دارد. نمونه‌ای آشنا از فاز ساکن قطبی، سیلیکا است که روی سطح آن گروه‌های سیلانول قرار دارند. این گروه‌ها باعث می‌شوند سطح سیلیکا قطبی باشد و بتواند با مواد قطبی برهم‌کنش کند.</p>
+  <p>در چنین ستونی، مادهٔ قطبی‌تر به فاز ساکن نزدیک‌تر می‌ماند و دیرتر خارج می‌شود؛ در مقابل، مادهٔ کم‌قطب‌تر تمایل کمتری به ستون دارد و زودتر بیرون می‌آید. این رفتار منطقی است: ستون قطبی، مواد قطبی را بیشتر نگه می‌دارد.</p>
+  <p>اما فاز نرمال محدودیت هم دارد. اگر نمونه ترکیبات متنوعی داشته باشد، به‌ویژه ترکیبات بازی که با سیلیکای قطبی برهم‌کنش شدید می‌دهند، ممکن است همهٔ مواد به‌شدت به ستون بچسبند یا برعکس، رفتارشان به‌قدری شبیه باشد که با هم خارج شوند. در مثال کلاس، ستون قطبی برای جداسازی دو ماده مشکل‌ساز شد و حتی احتمال داشت هر دو با هم بیرون بیایند. رفتار مادهٔ بازی روی چنین ستونی می‌تواند کنترل‌نشده باشد و ماده زودتر از حد انتظار از ستون خارج شود. در چنین شرایطی یک ستون قطبی به‌تنهایی پاسخگو نیست.</p>
+
+  <h3>فاز معکوس: ستون غیرقطبی</h3>
+  <p>وقتی فاز ساکن غیرقطبی باشد، به روش <b>فاز معکوس</b> یا <b>ریورس</b> می‌رسیم. در فاز معکوس، فاز متحرک قطبی‌تر است؛ مثلاً آب یا مخلوطی از حلال‌های قطبی. امروزه بیشتر روش‌های کروماتوگرافی از فاز معکوس استفاده می‌کنند، چون برای طیف وسیعی از مواد کارآمدتر است.</p>
+  <p>در فاز معکوس، قطبیت برعکس عمل می‌کند: مادهٔ کم‌قطب‌تر تمایل بیشتری به ستون غیرقطبی دارد و دیرتر خارج می‌شود؛ مادهٔ قطبی‌تر تمایل کمتری به ستون دارد و زودتر بیرون می‌آید. به همین دلیل، در فاز معکوس معمولاً مواد قطبی‌تر در ابتدای کروماتوگرام ظاهر می‌شوند و مواد کم‌قطب‌تر دیرتر می‌آیند.</p>
+
+  <div class="two-col">
+    <div class="mini polar">
+      <div class="mini-t">فاز نرمال</div>
+      <p><b>فاز ساکن:</b> قطبی، مانند سیلیکا با گروه‌های سیلانول.</p>
+      <p><b>فاز متحرک:</b> کم‌قطب‌تر از فاز ساکن.</p>
+      <p><b>نگه‌داری:</b> مواد قطبی‌تر بیشتر می‌مانند و دیرتر خارج می‌شوند.</p>
+      <p><b>کاربرد:</b> جداسازی مواد قطبی و نمونه‌های خاص.</p>
+    </div>
+    <div class="mini nonpolar">
+      <div class="mini-t">فاز معکوس</div>
+      <p><b>فاز ساکن:</b> غیرقطبی، مانند زنجیرهای کربنی C18.</p>
+      <p><b>فاز متحرک:</b> قطبی‌تر از فاز ساکن.</p>
+      <p><b>نگه‌داری:</b> مواد کم‌قطب‌تر بیشتر می‌مانند و دیرتر خارج می‌شوند.</p>
+      <p><b>کاربرد:</b> بخش بزرگی از روش‌های امروزی و مخلوط‌های متنوع.</p>
+    </div>
+  </div>
+
+  <p>نکتهٔ مهم این است که فاز نرمال و معکوس، دو روش جدا از هم نیستند؛ بلکه دو حالت از یک اصل‌اند. هر روش کروماتوگرافی می‌تواند بسته به جنس فاز ساکن، نرمال یا معکوس باشد. اگر ستون قطبی باشد، روش فاز نرمال است و اگر ستون غیرقطبی باشد، روش فاز معکوس. بنابراین وقتی نوع کروماتوگرافی را بیان می‌کنیم، باید هم فاز متحرک و هم فاز ساکن را در نظر بگیریم.</p>
+
+  <h3>ضریب توزیع K</h3>
+  <p>در حالت تعادل، نسبت غلظت ماده در فاز ساکن به غلظت آن در فاز متحرک را <b>ضریب توزیع</b> یا <b>ضریب پارتیشن</b> می‌نامند و با حرف K نشان می‌دهند. این نسبت نشان می‌دهد ماده در کدام فاز بیشتر دوست دارد بماند.</p>
+
+  <div class="formula">
+    K = C<sub>s</sub> / C<sub>m</sub>
+    <div class="formula-note">C<sub>s</sub>: غلظت ماده در فاز ساکن؛ C<sub>m</sub>: غلظت ماده در فاز متحرک</div>
+  </div>
+
+  <p>اگر K بزرگ باشد، یعنی غلظت ماده در فاز ساکن بیشتر است؛ ماده بیشتر در ستون می‌ماند و دیرتر خارج می‌شود. اگر K کوچک باشد، ماده بیشتر در فاز متحرک است و زودتر از ستون بیرون می‌آید. پس K بزرگ نشان‌دهندهٔ تمایل زیاد به فاز ساکن و K کوچک نشان‌دهندهٔ تمایل کم به فاز ساکن است.</p>
+  <p>یک نکتهٔ ظریف اما مهم: رسیدن به تعادل به معنای برابر بودن غلظت در دو فاز نیست. تعادل فقط یعنی نرخ رفتن ماده به فاز ساکن با نرخ برگشتن آن به فاز متحرک برابر شده است. غلظت‌ها می‌توانند کاملاً متفاوت باشند. برابر بودن غلظت دو فاز فقط یک حالت خاص است، یعنی وقتی K برابر یک باشد. در بسیاری از جداسازی‌ها K نه یک، بلکه بزرگ‌تر یا کوچک‌تر از یک است.</p>
+
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr><th style="width:22%">مقدار K</th><th style="width:30%">تمایل ماده</th><th style="width:24%">زمان خروج</th><th style="width:24%">معنی عملی</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>بسیار بزرگ</td><td>تمایل بسیار زیاد به فاز ساکن</td><td>بسیار دیر</td><td>ماده در ستون می‌ماند و ممکن است خیلی کند خارج شود.</td></tr>
+        <tr><td>بزرگ</td><td>تمایل بیشتر به فاز ساکن</td><td>دیرتر</td><td>نسبت به مادهٔ با K کوچک‌تر، دیرتر ظاهر می‌شود.</td></tr>
+        <tr><td>حدود ۱</td><td>تمایل متعادل به دو فاز</td><td>میانه</td><td>غلظت دو فاز در حالت تعادل برابر است.</td></tr>
+        <tr><td>کوچک</td><td>تمایل بیشتر به فاز متحرک</td><td>زودتر</td><td>سریع‌تر از ستون خارج می‌شود.</td></tr>
+        <tr><td>بسیار کوچک</td><td>تمایل بسیار کم به فاز ساکن</td><td>بسیار زود</td><td>تقریباً با فاز متحرک حرکت می‌کند.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="box warning">
+    <div class="box-t">اشتباه رایج</div>
+    <p>تعادل به معنای «غلظت مساوی در دو فاز» نیست. این دو مفهوم را جدا نگه دارید: <b>تعادل</b> یعنی برابری نرخ‌های رفت‌وبرگشت؛ <b>K</b> نسبت غلظت‌ها در همان حالت تعادل است. K می‌تواند یک، بزرگ‌تر از یک یا کوچک‌تر از یک باشد.</p>
+  </div>
+
+  <h3>دو نتیجهٔ کلیدی این بخش</h3>
+  <ol>
+    <li><b>نوع فاز ساکن، خانوادهٔ روش را تعیین می‌کند:</b> ستون قطبی یعنی فاز نرمال و ستون غیرقطبی یعنی فاز معکوس. همهٔ روش‌ها می‌توانند در یکی از این دو دسته قرار بگیرند.</li>
+    <li><b>ضریب توزیع، رفتار ماده را توضیح می‌دهد:</b> با K می‌فهمیم ماده بیشتر در فاز ساکن می‌ماند یا فاز متحرک، و در نتیجه دیرتر یا زودتر خارج می‌شود.</li>
+  </ol>
+
+  <div class="box summary">
+    <div class="box-t">خلاصهٔ فصل</div>
+    <p>فاز نرمال یعنی ستون قطبی و فاز متحرک کم‌قطب‌تر؛ فاز معکوس یعنی ستون غیرقطبی و فاز متحرک قطبی‌تر. ضریب توزیع K نسبت غلظت در فاز ساکن به فاز متحرک است. K بزرگ یعنی ماندن بیشتر و خروج دیرتر؛ K کوچک یعنی ماندن کمتر و خروج زودتر. تعادل، برابر بودن غلظت نیست.</p>
+  </div>
+</section>
+
+<section class="chapter" id="ch3">
+  <div class="ch-head"><span class="ch-num">۳</span><h2>خانوادهٔ کروماتوگرافی بر اساس فاز متحرک</h2></div>
+
+  <p>راه دیگر دسته‌بندی روش‌های کروماتوگرافی، توجه به حالت فاز متحرک است. فاز متحرک می‌تواند گاز باشد یا مایع و همین موضوع، نام و ساختار روش را تعیین می‌کند. در این بخش، خانواده‌های اصلی را با یک قاعدهٔ سادهٔ نام‌گذاری مرور می‌کنیم و سپس جای هر روش را در جدول کلی مشخص می‌کنیم.</p>
+
+  <h3>قاعدهٔ نام‌گذاری</h3>
+  <p>در نام‌های اختصاری کروماتوگرافی، حرف اول به فاز متحرک اشاره دارد. حرف G از گاز گرفته شده است و حرف L از مایع. بنابراین وقتی می‌گوییم GC، فاز متحرک گاز است و وقتی می‌گوییم LC، فاز متحرک مایع است. بخش‌های بعدی نام، اطلاعات بیشتری دربارهٔ فاز ساکن می‌دهند.</p>
+  <p>این قاعده به شما کمک می‌کند در امتحان یا در آزمایشگاه، بدون حفظ‌کردن فهرست بلند، نام روش را تحلیل کنید. اگر فاز متحرک گاز باشد، به خانوادهٔ روش‌های گازی می‌رویم؛ اگر مایع باشد، به خانوادهٔ روش‌های مایع می‌رسیم. سپس با توجه به فاز ساکن، زیرشاخهٔ دقیق را مشخص می‌کنیم.</p>
+
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr><th style="width:14%">روش</th><th style="width:25%">نام کامل</th><th style="width:17%">فاز متحرک</th><th style="width:20%">فاز ساکن</th><th style="width:24%">ویژگی کلیدی</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><span class="ltr">GC</span></td><td>کروماتوگرافی گازی</td><td>گاز</td><td>جامد</td><td>ستون باریک و بلند؛ گاز باید فضای عبور داشته باشد.</td></tr>
+        <tr><td><span class="ltr">GLC</span></td><td>کروماتوگرافی گاز-مایع</td><td>گاز</td><td>مایع</td><td>فاز ساکن مایع به‌صورت پوشش روی نگه‌دارنده قرار می‌گیرد.</td></tr>
+        <tr><td><span class="ltr">LC</span></td><td>کروماتوگرافی مایع</td><td>مایع</td><td>جامد یا مایع</td><td>نمونه در فاز متحرک مایع حل می‌شود.</td></tr>
+        <tr><td><span class="ltr">HPLC</span></td><td>کروماتوگرافی مایع با کارایی بالا</td><td>مایع</td><td>جامد پرشده</td><td>ستون آماده و پرشده؛ پمپ برای عبور فاز متحرک.</td></tr>
+        <tr><td><span class="ltr">PC</span></td><td>کروماتوگرافی کاغذی</td><td>مایع</td><td>جامد، کاغذ</td><td>حرکت فاز متحرک روی کاغذ و جداسازی لکه‌ها.</td></tr>
+        <tr><td><span class="ltr">TLC</span></td><td>کروماتوگرافی لایه نازک</td><td>مایع</td><td>جامد، لایهٔ نازک روی صفحه</td><td>صفحهٔ پوشیده از سیلیکا؛ حرکت حلال به‌صورت صعودی.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>GC و GLC: وقتی فاز متحرک گاز است</h3>
+  <p>در کروماتوگرافی گازی، فاز متحرک یک گاز است و ماده با همان گاز در ستون حرکت می‌کند. در ساده‌ترین حالت، فاز ساکن جامد است و روش را GC می‌نامیم. اگر فاز ساکن مایع باشد، به کروماتوگرافی گاز-مایع یا GLC می‌رسیم. در GLC، مایع نمی‌تواند تمام ستون را پر کند، چون در آن صورت جایی برای عبور گاز نمی‌ماند؛ بنابراین مایع را به‌صورت لایه‌ای نازک روی یک نگه‌دارنده قرار می‌دهند.</p>
+  <p>ستون GC معمولاً بسیار باریک و بلند است؛ گاهی قطر آن در حد میلی‌متر است. داخل چنین ستونی باید فضای باز وجود داشته باشد تا گاز حرکت کند. به همین دلیل، فاز ساکن را روی دیوارهٔ داخلی ستون می‌نشانند و مسیر مرکزی برای عبور گاز باقی می‌ماند. این تصویر، یکی از مهم‌ترین تفاوت‌های ستون گازی با ستون‌های پرِ مایع است.</p>
+
+  <h3>LC، HPLC، PC و TLC: وقتی فاز متحرک مایع است</h3>
+  <p>در کروماتوگرافی مایع، فاز متحرک مایع است و نمونه باید در آن حل شود. LC نام کلی این خانواده است. HPLC نسخه‌ای پیشرفته‌تر از LC است که در آن از ستون آماده و پرشده و پمپ برای عبور فاز متحرک استفاده می‌شود. در HPLC، ذرات ستون می‌توانند ریز باشند و پمپ فشار لازم برای عبور فاز متحرک را تأمین می‌کند.</p>
+  <p>کروماتوگرافی کاغذی یا PC نیز فاز متحرک مایع دارد، اما فاز ساکن کاغذ است. در TLC، فاز ساکن یک لایهٔ نازک جامد روی صفحه است و فاز متحرک مایع از پایین صفحه به سمت بالا حرکت می‌کند. هر دو روش برای تشخیص و جداسازی‌های کوچک به کار می‌روند؛ با این تفاوت که TLC در آزمایشگاه‌های آموزشی و پژوهشی بسیار رایج‌تر است و کنترل آسان‌تری دارد.</p>
+
+  <h3>جای اندازهٔ مولکول و ذرات</h3>
+  <p>در بخشی از بحث کلاس به اندازهٔ مولکول و اندازهٔ ذرات ستون هم اشاره شد؛ حتی از جداسازی بر اساس اندازهٔ پروتئین به‌عنوان یک مثال یاد شد. وقتی ذرات در ستون قرار می‌گیرند، اندازه و شکل آن‌ها می‌تواند در دسترسی مولکول‌ها به فاز ساکن و در نتیجه در رفتار جداسازی نقش داشته باشد. این نکته به ما یادآوری می‌کند که انتخاب ستون فقط به قطبی یا غیرقطبی بودن محدود نمی‌شود؛ ساختار فیزیکی بستر و اندازهٔ ذرات هم مهم‌اند.</p>
+
+  <div class="box example">
+    <div class="box-t">مثال برای تشخیص خانواده</div>
+    <p>اگر در صورت سؤال گفته شود فاز متحرک گاز است، روش در خانوادهٔ GC یا GLC قرار می‌گیرد. اگر فاز متحرک مایع باشد، به LC، HPLC، PC یا TLC می‌رسیم. سپس با نگاه به فاز ساکن، نام دقیق روش را انتخاب می‌کنیم: کاغذ برای PC، لایهٔ نازک جامد برای TLC و ستون پرشده برای HPLC.</p>
+  </div>
+
+  <div class="box tip">
+    <div class="box-t">جملهٔ کوتاه برای حفظ‌کردن</div>
+    <p>حرف اول نام، حالت فاز متحرک را می‌گوید: <b>G</b> برای گاز و <b>L</b> برای مایع. بقیهٔ نام، فاز ساکن و جزئیات روش را توضیح می‌دهد.</p>
+  </div>
+</section>
+
+<section class="chapter" id="ch4">
+  <div class="ch-head"><span class="ch-num">۴</span><h2>ستون‌ها: قطبیت، C18 و معماری بستر</h2></div>
+
+  <p>ستون، قلب یک جداسازی کروماتوگرافی است. جنس فاز ساکن، نحوهٔ قرار گرفتن آن در ستون و اندازهٔ ذرات، همه در کیفیت جداسازی اثر می‌گذارند. در این فصل ابتدا محدودیت ستون قطبی را می‌بینیم، سپس به ستون غیرقطبی و C18 می‌رسیم و در پایان دو معماری اصلی ستون را مقایسه می‌کنیم.</p>
+
+  <h3>ستون قطبی و محدودیت آن</h3>
+  <p>ستون قطبی، معمولاً سیلیکای دارای گروه‌های سیلانول است. این ستون برای بعضی نمونه‌ها عالی کار می‌کند، اما برای مخلوط‌های متنوع محدودیت دارد. اگر ماده‌های نمونه به‌قدری به سیلیکای قطبی بچسبند که تقریباً همه یک رفتار داشته باشند، دیگر نمی‌توان آن‌ها را از هم تفکیک کرد. در مثال کلاس، چهار ماده روی ستون قطبی تقریباً همه به یک شکل چسبیدند و جداسازی معناداری رخ نداد.</p>
+  <p>مشکل دیگر زمانی است که تعداد مواد زیاد باشد. یک مکانیسم واحد نمی‌تواند همهٔ مواد را با یک ستون قطبی از هم جدا کند؛ چون همهٔ مواد قابلیت یکسانی برای برهم‌کنش با سیلیکا ندارند. در چنین شرایطی، به‌جای اصرار بر ستون قطبی، باید سراغ ستون غیرقطبی و فاز معکوس رفت. این تصمیم، یکی از درس‌های عملی مهم جلسه است: روش را با نمونه تطبیق می‌دهیم، نه اینکه نمونه را به زور با یک روش ثابت جدا کنیم.</p>
+
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr><th style="width:20%">ویژگی</th><th style="width:40%">ستون قطبی</th><th style="width:40%">ستون غیرقطبی</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>فاز ساکن</td><td>سیلیکا با گروه‌های سیلانول</td><td>زنجیرهای کربنی، مانند C18</td></tr>
+        <tr><td>نوع برهم‌کنش</td><td>قطبی و جذب سطحی</td><td>غیرقطبی و آب‌گریز</td></tr>
+        <tr><td>ترتیب خروج</td><td>مواد کم‌قطب‌تر زودتر، مواد قطبی‌تر دیرتر</td><td>مواد قطبی‌تر زودتر، مواد کم‌قطب‌تر دیرتر</td></tr>
+        <tr><td>توان جداسازی مخلوط متنوع</td><td>محدود؛ ممکن است مواد با هم خارج شوند</td><td>بهتر؛ تفاوت‌های کوچک را هم آشکار می‌کند</td></tr>
+        <tr><td>محدودیت اصلی</td><td>چسبیدن شدید یا رفتار مشابه چند ماده</td><td>نیاز به انتخاب دقیق حلال و فلو</td></tr>
+        <tr><td>جایگاه در درس</td><td>فاز نرمال</td><td>فاز معکوس</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>C18: دمی از جنس کربن</h3>
+  <p>نمونهٔ شناخته‌شدهٔ ستون فاز معکوس، ستون C18 است. در این ستون، زنجیرهای ۱۸ کربنه به سیلیکا متصل شده است. این زنجیر مانند یک دم دراز روی سطح سیلیکا قرار می‌گیرد و سطحی غیرقطبی می‌سازد. ماده‌های کم‌قطب‌تر با این دم‌های کربنی بهتر برهم‌کنش می‌کنند و بیشتر می‌مانند؛ ماده‌های قطبی‌تر کمتر می‌مانند و زودتر خارج می‌شوند.</p>
+  <p>اتصال این زنجیرها به سیلیکا یک کار مهندسی سطح است. هدف این است که سطحی پایدار و غیرقطبی داشته باشیم تا جداسازی در فاز معکوس ممکن شود. در مثال کلاس، ستون غیرقطبی توانست بین چهار ماده تفاوت قائل شود، در حالی که ستون قطبی همه را شبیه هم نگه می‌داشت. پس از آن، جداسازی با تنظیم سرعت حلال و فلوی فاز متحرک انجام شد.</p>
+
+  <div class="box example">
+    <div class="box-t">مثال مقایسه‌ای</div>
+    <p>فرض کنید چهار ماده دارید. روی ستون قطبی، هر چهار ماده تقریباً به یک شکل می‌چسبند و با هم خارج می‌شوند. روی ستون غیرقطبی C18، هر ماده بر اساس کم‌قطب‌تر بودنش مدت متفاوتی می‌ماند؛ بنابراین با فلوی مناسب و حلال مناسب، چهار پیک جدا از هم به دست می‌آید.</p>
+  </div>
+
+  <h3>دو معماری برای جایگذاری فاز ساکن</h3>
+  <p>فاز ساکن را می‌توان به دو شکل اصلی در ستون قرار داد. در حالت اول، ستون به‌طور کامل از بستر جامد پر می‌شود. در این حالت، بین ذرات جامد فضاهای خالی یا خلل و فرج باقی می‌ماند و فاز متحرک از همین فضاها عبور می‌کند. این معماری برای ستون‌های پرشده و برای فاز ساکن جامد مناسب است.</p>
+  <p>در حالت دوم، فاز ساکن به‌صورت یک لایهٔ نازک روی دیوارهٔ داخلی ستون قرار می‌گیرد. این حالت وقتی لازم می‌شود که فاز ساکن مایع باشد. اگر بخواهیم ستون را از مایع پر کنیم، دیگر فضایی برای عبور فاز متحرک نمی‌ماند و همه‌چیز با هم قاطی می‌شود. بنابراین مایع را به‌صورت پوشش نازک روی دیواره می‌نشانند و مسیر مرکزی را برای عبور فاز متحرک باز می‌گذارند.</p>
+  <p>در کروماتوگرافی گازی، این معماری کاملاً منطقی است: ستون باریک و بلند است و گاز برای حرکت به فضای باز نیاز دارد. در ستون‌های آمادهٔ آزمایشگاهی و HPLC (مانند ستون‌های C8) بستر جامد تمام ستون را پر می‌کند و فاز متحرک با فشار پمپ از میان ذرات عبور می‌کند.</p>
+
+  <div class="figure">
+    <div class="fig-title">نمودار تجسمی: دو نوع جایگذاری فاز ساکن</div>
+    <div class="col-demo">
+      <div class="col-unit">
+        <div class="col-glass">
+          <div class="col-fill"></div>
+          <div class="col-frit"></div>
+          <div class="col-tip"></div>
+        </div>
+        <span class="col-label">ستون پرشده</span>
+        <span class="col-note">بستر جامد تمام ستون را پر کرده و فاز متحرک از خلل و فرج عبور می‌کند.</span>
+      </div>
+      <div class="col-unit">
+        <div class="col-glass">
+          <div class="col-wall right"></div>
+          <div class="col-wall left"></div>
+          <div class="col-frit"></div>
+          <div class="col-tip"></div>
+        </div>
+        <span class="col-label">ستون با پوشش دیواره</span>
+        <span class="col-note">فاز ساکن مایع به‌صورت لایهٔ نازک روی دیواره است و مسیر مرکزی باز می‌ماند.</span>
+      </div>
+    </div>
+    <div class="fig-cap">در ستون پرشده، مسیر عبور از میان ذرات است؛ در ستون با پوشش دیواره، فاز ساکن فقط دیواره را می‌پوشاند و فاز متحرک از فضای باز مرکزی می‌گذرد.</div>
+  </div>
+
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr><th style="width:22%">نوع ستون</th><th style="width:20%">فاز ساکن</th><th style="width:28%">ساختار</th><th style="width:30%">دلیل انتخاب</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>ستون پرشده</td><td>جامد، مانند سیلیکا</td><td>ذرات در تمام ستون جای می‌گیرند و بین آن‌ها فضای خالی می‌ماند.</td><td>فاز متحرک از میان ذرات عبور می‌کند؛ مناسب HPLC و ستون‌های آماده.</td></tr>
+        <tr><td>ستون با پوشش دیواره</td><td>مایع</td><td>لایهٔ نازک روی دیوارهٔ داخلی؛ مرکز ستون باز است.</td><td>اگر مایع تمام ستون را پر کند، مسیر عبور فاز متحرک می‌بندد.</td></tr>
+        <tr><td>ستون مویین گازی</td><td>جامد یا مایع پوششی</td><td>ستون بسیار باریک و بلند با فضای باز مرکزی.</td><td>گاز برای حرکت به فضای باز نیاز دارد.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="box warning">
+    <div class="box-t">نکتهٔ عملی</div>
+    <p>اگر فاز ساکن مایع باشد و آن را بدون پوشش دیواره در ستون بریزید، فاز متحرک جایی برای عبور پیدا نمی‌کند. این اشتباه باعث می‌شود جداسازی به‌کل مختل شود. پس نوع فاز ساکن، معماری ستون را تعیین می‌کند.</p>
+  </div>
+</section>
+
+<section class="chapter" id="ch5">
+  <div class="ch-head"><span class="ch-num">۵</span><h2>سرعت جریان، کیفیت و هزینه</h2></div>
+
+  <p>یک جداسازی خوب فقط به ستون و حلال وابسته نیست؛ سرعت حرکت فاز متحرک هم نقش تعیین‌کننده دارد. در این فصل می‌بینیم چگونه سرعت را تنظیم کنیم که هم زمان اجرا کوتاه باشد و هم کیفیت جداسازی حفظ شود. سپس به هزینهٔ حلال و آب می‌رسیم؛ عاملی که در انتخاب روش آزمایشگاهی اغلب نادیده گرفته می‌شود.</p>
+
+  <h3>سرعت بهینه، نه سرعت حداکثری</h3>
+  <p>هدف در کروماتوگرافی این است که در کمترین زمان ممکن، جداسازی با کیفیت انجام شود. اگر سرعت فاز متحرک را بیش از حد بالا ببریم، مواد فرصت نمی‌کنند بین دو فاز به تعادل برسند و باندها پهن و به هم نزدیک می‌شوند. نتیجه این است که مواد با هم از ستون خارج می‌شوند و جداسازی خراب می‌شود. بنابراین افزایش سرعت به‌تنهایی راه‌حل نیست؛ باید سرعت را در نقطه‌ای تنظیم کنیم که جداسازی هنوز خوب باشد.</p>
+  <p>وقتی سرعت درست تنظیم شود، هم زمان اجرا کوتاه می‌شود و هم هزینهٔ حلال کاهش می‌یابد. در بحث کلاس تأکید شد که خلوص نهایی باید بالا باشد؛ حتی به خلوصی در حدود ۹۹ درصد اشاره شد. یعنی نباید برای صرفه‌جویی در زمان، کیفیت را فدای کمیت کنیم. جداسازی خوب، جداسازی‌ای است که مواد را تمیز و بدون هم‌پوشانی جدا کند.</p>
+
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr><th style="width:20%">وضعیت فلو</th><th style="width:20%">زمان اجرا</th><th style="width:28%">کیفیت جداسازی</th><th style="width:32%">نتیجه</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>کم</td><td>طولانی</td><td>معمولاً خوب؛ فرصت تعادل بیشتر است.</td><td>هزینهٔ حلال و زمان بالا می‌رود.</td></tr>
+        <tr><td>بهینه</td><td>متوسط و کمینه</td><td>بهترین تعادل بین کیفیت و زمان.</td><td>جداسازی خوب با کمترین هزینه.</td></tr>
+        <tr><td>زیاد</td><td>کوتاه</td><td>باندها پهن و به هم نزدیک می‌شوند.</td><td>احتمال هم‌پوشانی و خروج مخلوط.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="box warning">
+    <div class="box-t">هشدار</div>
+    <p>افزایش کورکورانهٔ فلو، جداسازی را سریع‌تر نمی‌کند؛ فقط آن را خراب‌تر می‌کند. سرعت را باید با توجه به ستون، حلال و نمونه تنظیم کرد.</p>
+  </div>
+
+  <h3>هزینهٔ حلال و آب</h3>
+  <p>حلال‌ها گران‌اند و در کارهای سنتزی و آزمایشگاهی، حجم مصرفی می‌تواند هزینهٔ قابل‌توجهی بسازد. به همین دلیل انتخاب روش و حلال باید اقتصادی باشد. بسیاری از افراد به‌جای روش‌های پرهزینه، روش ساده‌تر و ارزان‌تر را انتخاب می‌کنند؛ اما این انتخاب نباید کیفیت جداسازی را از بین ببرد. نقطهٔ تعادل، جایی است که هم نتیجهٔ علمی قابل قبول باشد و هم هزینهٔ کلی معقول بماند. در حالت عادی ترجیح می‌دهیم موادی انتخاب کنیم که مسیر پیچیده را طی نکنند و جداسازی راحت‌تری بدهند.</p>
+  <p>حتی آب هم در این محاسبه مهم است. آبی که در ستون به کار می‌رود باید خالص باشد؛ در کلاس تأکید شد که برای ستون از آب مقطر استفاده شود، نه آب شیر. آب شیر می‌تواند یون‌ها و مواد مزاحم داشته باشد و جداسازی را مختل کند. بنابراین خلوص حلال، بخشی از کیفیت روش است، نه یک جزئیات تزئینی.</p>
+
+  <div class="box summary">
+    <div class="box-t">چک‌لیست انتخاب شرایط</div>
+    <ul class="checklist">
+      <li>ستون با قطبیت نمونه هم‌خوان باشد.</li>
+      <li>حلال بتواند نمونه را حل کند و با ستون واکنش ندهد.</li>
+      <li>فلو در نقطهٔ بهینه باشد، نه حداکثر سرعت ممکن.</li>
+      <li>آب و حلال‌ها خالص و مناسب باشند.</li>
+      <li>هزینهٔ کل اجرا با کیفیت لازم متعادل شود.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="chapter" id="ch6">
+  <div class="ch-head"><span class="ch-num">۶</span><h2>خواندن کروماتوگرام</h2></div>
+
+  <p>خروجی یک اجرای کروماتوگرافی، یک نمودار است که به آن کروماتوگرام می‌گویند. در این نمودار، هر ماده به‌صورت یک پیک یا قله ظاهر می‌شود. پیک‌ها فقط شکل نیستند؛ ارتفاع، پهنا، مساحت و زمان ظهور هر کدام معنای مشخصی دارند. خواندن درست این نمودار، بخش مهمی از تفسیر جداسازی است.</p>
+
+  <h3>پیک و سه ویژگی اصلی آن</h3>
+  <p>هر پیک معمولاً شکلی زنگوله‌ای دارد. ارتفاع پیک نشان‌دهندهٔ غلظت ماده در آن بخش از نمونه است؛ هرچه پیک بلندتر باشد، غلظت بیشتر است. پهنای پیک نشان می‌دهد ماده در چه بازهٔ زمانی از ستون خارج شده است. پیک باریک یا شارپ نشان می‌دهد ماده در بازهٔ کوتاهی خارج شده و جداسازی متمرکز بوده است. پیک پهن نشان می‌دهد ماده در بازهٔ وسیعی پخش شده است.</p>
+  <p>پهن شدن پیک همیشه هم بد نیست، اما معمولاً نشانهٔ پخش شدن و کاهش کیفیت جداسازی است. اگر پیک پهن شود، ممکن است به پیک مادهٔ بعدی یا قبلی نزدیک شود و حتی زیر آن پنهان شود. در این حالت، ممکن است دو ماده داشته باشیم ولی فقط یک پیک پهن ببینیم. بنابراین پهنای پیک را باید جدی گرفت.</p>
+  <p>در عین حال، نمی‌توان صرفاً از پهن بودن پیک قضاوت کرد. جنس حلال، فلو و شرایط اجرا هم در پهن شدن نقش دارند. ممکن است همان ماده در شرایط دیگری پیک باریک‌تری بدهد. پس تفسیر کروماتوگرام بدون شناخت روش و نمونه کامل نیست. نکتهٔ مهم دیگر، مساحت زیر پیک است: مساحت زیر نمودار مقدار کل ماده را نشان می‌دهد و برای مقایسهٔ کمّی بسیار مهم است.</p>
+
+  <div class="figure">
+    <div class="fig-title">نمودار تجسمی: یک کروماتوگرام نمونه</div>
+    <div class="chart">
+      <svg viewBox="0 0 700 260" role="img" aria-label="نمودار کروماتوگرام با سه پیک">
+        <line x1="55" y1="220" x2="670" y2="220" stroke="#f5d3bd" stroke-width="2"></line>
+        <line x1="55" y1="220" x2="55" y2="40" stroke="#f5d3bd" stroke-width="2"></line>
+        <line x1="55" y1="170" x2="670" y2="170" stroke="#f5d3bd" stroke-width="1" stroke-dasharray="4 5" opacity="0.7"></line>
+        <line x1="55" y1="120" x2="670" y2="120" stroke="#f5d3bd" stroke-width="1" stroke-dasharray="4 5" opacity="0.7"></line>
+        <line x1="55" y1="70" x2="670" y2="70" stroke="#f5d3bd" stroke-width="1" stroke-dasharray="4 5" opacity="0.7"></line>
+        <line x1="78" y1="220" x2="78" y2="58" stroke="#b91c1c" stroke-width="1.5" stroke-dasharray="4 4"></line>
+        <path d="M 135 220 C 165 220 175 92 212 92 C 249 92 259 220 289 220" fill="none" stroke="#c2410c" stroke-width="2.6"></path>
+        <path d="M 315 220 C 350 220 365 138 408 138 C 451 138 466 220 501 220" fill="none" stroke="#b91c1c" stroke-width="2.6"></path>
+        <path d="M 530 220 C 548 220 556 72 582 72 C 608 72 616 220 634 220" fill="none" stroke="#c2410c" stroke-width="2.6"></path>
+        <circle cx="212" cy="92" r="4" fill="#b91c1c"></circle>
+        <circle cx="408" cy="138" r="4" fill="#b91c1c"></circle>
+        <circle cx="582" cy="72" r="4" fill="#b91c1c"></circle>
+        <text x="78" y="246" text-anchor="middle" font-family="Vazirmatn, Tahoma, sans-serif" font-size="11" fill="#1c2733">۰</text>
+        <text x="212" y="246" text-anchor="middle" font-family="Vazirmatn, Tahoma, sans-serif" font-size="11" fill="#1c2733">۲</text>
+        <text x="408" y="246" text-anchor="middle" font-family="Vazirmatn, Tahoma, sans-serif" font-size="11" fill="#1c2733">۴</text>
+        <text x="582" y="246" text-anchor="middle" font-family="Vazirmatn, Tahoma, sans-serif" font-size="11" fill="#1c2733">۶</text>
+        <text x="212" y="78" text-anchor="middle" font-family="Vazirmatn, Tahoma, sans-serif" font-size="11" font-weight="700" fill="#b91c1c">۱</text>
+        <text x="408" y="124" text-anchor="middle" font-family="Vazirmatn, Tahoma, sans-serif" font-size="11" font-weight="700" fill="#b91c1c">۲</text>
+        <text x="582" y="58" text-anchor="middle" font-family="Vazirmatn, Tahoma, sans-serif" font-size="11" font-weight="700" fill="#b91c1c">۳</text>
+      </svg>
+    </div>
+    <div class="chart-legend">
+      <span>محور افقی: زمان</span>
+      <span>محور عمودی: سیگنال</span>
+      <span>خط‌چین: لحظهٔ تزریق</span>
+    </div>
+    <div class="fig-cap">پیک ۱ بلند و باریک است؛ پیک ۲ پهن‌تر و کوتاه‌تر است؛ پیک ۳ دیرتر ظاهر شده است. ارتفاع، پهنا و زمان هر پیک معنای جداگانه دارد.</div>
+  </div>
+
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr><th style="width:20%">ویژگی پیک</th><th style="width:27%">معنا</th><th style="width:30%">تفسیر</th><th style="width:23%">هشدار</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>ارتفاع</td><td>غلظت ماده در آن بخش</td><td>پیک بلندتر یعنی غلظت بیشتر.</td><td>ارتفاع به شرایط اجرا هم وابسته است.</td></tr>
+        <tr><td>پهنا</td><td>بازهٔ زمانی خروج ماده</td><td>پیک باریک‌تر معمولاً جداسازی متمرکزتر.</td><td>پهنای زیاد می‌تواند نشانهٔ هم‌پوشانی باشد.</td></tr>
+        <tr><td>مساحت</td><td>مقدار کل ماده</td><td>برای مقایسهٔ کمّی مهم است.</td><td>مساحت را با ارتفاع اشتباه نگیرید.</td></tr>
+        <tr><td>زمان بازداری</td><td>فاصلهٔ تزریق تا اوج پیک</td><td>برای شناسایی و مقایسهٔ اجراها.</td><td>شرایط اجرا باید یکسان باشد.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>زمان بازداری</h3>
+  <p>زمان بازداری از لحظهٔ تزریق نمونه، یعنی زمان صفر، تا رسیدن پیک به اوج اندازه‌گیری می‌شود. مثلاً اگر پیکی در عرض دو دقیقه ظاهر شود، زمان بازداری آن حدود دو دقیقه است. این عدد برای هر ماده در شرایط مشخص، ویژگی مهمی است و به شناسایی ماده کمک می‌کند.</p>
+  <p>پیکی که زودتر خارج می‌شود، تمایل کمتری به فاز ساکن داشته است. در فاز معکوس، چنین ماده‌ای می‌تواند قطبی‌تر باشد؛ چون ستون غیرقطبی است و مواد قطبی‌تر کمتر نگه داشته می‌شوند. برعکس، پیکی که دیرتر می‌آید، تمایل بیشتری به فاز ساکن دارد و در فاز معکوس معمولاً کم‌قطب‌تر است.</p>
+  <p>اگر اجرای اول با یک نسبت مشخص از حلال، جداسازی خوبی نداد، نسبت حلال را تغییر می‌دهیم. تغییر حلال می‌تواند فاصلهٔ پیک‌ها را بیشتر کند و مادهٔ دیرتر را جابه‌جا کند. این همان تنظیم شرایط است که در فصل سرعت و هزینه دربارهٔ آن صحبت کردیم. زمان بازداری، ابزار اصلی برای فهمیدن اینکه تغییر شرایط چه اثری گذاشته است.</p>
+
+  <div class="box example">
+    <div class="box-t">مثال تفسیر</div>
+    <p>فرض کنید در اجرای اول با یک درصد مشخص از حلال، دو پیک خیلی نزدیک به هم ظاهر شدند. چون فاصله کم است، احتمال هم‌پوشانی وجود دارد. با تغییر نسبت حلال، یکی از پیک‌ها زودتر و دیگری دیرتر می‌شود و فاصلهٔ آن‌ها بیشتر می‌شود. حالا جداسازی واضح‌تر است.</p>
+  </div>
+
+  <div class="box tip">
+    <div class="box-t">نکتهٔ کلیدی</div>
+    <p>یک پیک پهن را نمی‌توان بدون شناخت روش و ماده قضاوت کرد. پهن شدن می‌تواند از حلال، فلو یا اختلاط با مادهٔ مجاور باشد. همیشه ارتفاع، پهنا، مساحت و زمان را با هم ببینید.</p>
+  </div>
+</section>
+
+<section class="chapter" id="ch7">
+  <div class="ch-head"><span class="ch-num">۷</span><h2>کروماتوگرافی لایه نازک و کنترل واکنش</h2></div>
+
+  <p>کروماتوگرافی لایه نازک یا TLC، ساده‌ترین و در دسترس‌ترین شکل کروماتوگرافی برای تشخیص است. در این روش، نمونه روی یک صفحهٔ پوشیده از فاز ساکن قرار می‌گیرد و فاز متحرک از پایین صفحه به سمت بالا حرکت می‌کند. TLC بیشتر برای تشخیص، کنترل واکنش و بررسی خلوص به کار می‌رود تا برای جداسازی مقادیر زیاد ماده.</p>
+
+  <h3>صفحهٔ TLC و انتخاب آن</h3>
+  <p>صفحهٔ TLC از یک لایهٔ نازک سیلیکا روی یک تکیه‌گاه ساخته می‌شود. تکیه‌گاه می‌تواند آلومینیومی یا پلاستیکی باشد. صفحه‌های آلومینیومی معمولاً کیفیت بهتری دارند و صفحه‌های پلاستیکی ارزان‌تر و کم‌کیفیت‌ترند. صفحه را می‌توان به اندازهٔ دلخواه برش داد؛ مثلاً یک صفحهٔ دو سانتی‌متری برای یک آزمایش کوچک کافی است.</p>
+  <p>سیلیکای صفحه باید به نور فرابنفش حساس باشد. بعد از لکه‌گذاری و توسعه، صفحه را زیر لامپ UV با طول موج ۲۵۴ نانومتر قرار می‌دهیم تا لکه‌ها دیده شوند. بعضی صفحه‌ها را می‌توان شست، خشک کرد و دوباره استفاده کرد؛ اما این کار به جنس صفحه و نوع آلودگی بستگی دارد. صفحه‌های شیشه‌ای پهن هم به کار می‌روند؛ بعضی از آن‌ها شیارهایی دارند. در همهٔ انواع صفحه، فاز متحرک باید آرام و بدون تلاطم حرکت کند.</p>
+
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr><th style="width:22%">نوع صفحه</th><th style="width:26%">مزیت</th><th style="width:28%">محدودیت</th><th style="width:24%">استفادهٔ مجدد</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>آلومینیومی</td><td>کیفیت بهتر و مقاومت بیشتر</td><td>هزینهٔ بالاتر</td><td>در برخی موارد پس از شست‌وشو و خشک‌کردن</td></tr>
+        <tr><td>پلاستیکی</td><td>ارزان و در دسترس</td><td>کیفیت کمتر و آسیب‌پذیری بیشتر</td><td>معمولاً محدودتر</td></tr>
+        <tr><td>شیشه‌ای پهن</td><td>سطح بزرگ‌تر برای نمونه‌های بیشتر</td><td>نیاز به احتیاط در جابه‌جایی</td><td>بسته به نوع پوشش و شرایط</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>چیدمان و اجرای TLC</h3>
+  <p>برای اجرا، یک بشر یا محفظهٔ TLC برمی‌داریم و فاز متحرک را کف آن می‌ریزیم. صفحه را طوری قرار می‌دهیم که لکه‌ها بالاتر از سطح حلال باشند. اگر سطح حلال به لکه برسد، حلال لکه را می‌شوید و نتیجه خراب می‌شود. چون فاز ساکن قطبی است، حلال باید قطبی باشد. محفظه باید از بخار حلال پر شود تا حرکت فاز متحرک یکنواخت باشد و ترکیب درصدی حلال به هم نریزد. در تمام مدت توسعه، حلال باید به‌طور پیوسته حرکت کند و خشک نشود.</p>
+  <p>روی صفحه دو خط مهم داریم: خط مبدأ که پایین صفحه است و لکه‌ها روی آن قرار می‌گیرند، و خط حلال که بالاتر است و پیشرفت فاز متحرک را نشان می‌دهد. فاصلهٔ بین این دو خط، مسیر جداسازی است. حرکت معمولاً ۲ تا ۵ دقیقه طول می‌کشد. اگر مواد در این زمان فرصت جدا شدن پیدا نکردند، می‌توان طول مسیر را بیشتر کرد یا حلال را تغییر داد. بعد از رسیدن حلال به حد مطلوب، صفحه را از محفظه بیرون می‌آوریم و در هوای آزاد خشک می‌کنیم؛ در صورت نیاز از سشوار هم استفاده می‌شود.</p>
+
+  <div class="figure">
+    <div class="fig-title">نمودار تجسمی: محفظهٔ TLC و حرکت فاز متحرک</div>
+    <div class="tlc-demo">
+      <div class="tlc-tank">
+        <div class="tlc-solvent"></div>
+        <div class="tlc-plate">
+          <div class="tlc-front"></div>
+          <div class="tlc-origin"></div>
+          <div class="spot a"></div>
+          <div class="spot b"></div>
+          <div class="spot c"></div>
+          <div class="spot d"></div>
+        </div>
+      </div>
+      <div class="tlc-side">
+        <div class="leg-row"><span class="leg-dot"></span><span>لکه‌ها روی خط مبدأ قرار می‌گیرند و نباید زیر سطح حلال بروند.</span></div>
+        <div class="leg-row"><span class="leg-dot"></span><span>فاز متحرک از پایین به بالا حرکت می‌کند و لکه‌ها را با خود می‌برد.</span></div>
+        <div class="leg-row"><span class="leg-dot"></span><span>خط حلال، بالاترین نقطهٔ پیشرفت فاز متحرک است.</span></div>
+        <div class="leg-row"><span class="leg-dot"></span><span>هرچه ماده تمایل بیشتری به فاز ساکن داشته باشد، کمتر بالا می‌رود.</span></div>
+      </div>
+    </div>
+    <div class="fig-cap">در این نمایش، لکه‌ها از خط مبدأ حرکت کرده و در ارتفاع‌های مختلف جدا شده‌اند. خط بالایی، خط حلال است.</div>
+  </div>
+
+  <div class="box warning">
+    <div class="box-t">خطای رایج</div>
+    <p>اگر سطح حلال از خط لکه‌ها بالاتر باشد، فاز متحرک لکه را می‌شوید و جداسازی بی‌معنا می‌شود. همیشه قبل از قرار دادن صفحه، سطح حلال را کنترل کنید.</p>
+  </div>
+
+  <h3>لکه‌گذاری و غلظت نمونه</h3>
+  <p>نمونه را در کمترین حجم حلال حل می‌کنیم. غلظت نباید خیلی زیاد باشد؛ اگر خیلی غلیظ باشد، چهار یا پنج لکه به هم می‌رسند و یک نقطهٔ بزرگ می‌سازند. در این حالت نمی‌توان تشخیص داد که یک ماده داریم یا چند ماده. غلظت باید مناسب باشد تا لکه‌ها واضح باشند و در عین حال از هم جدا بمانند.</p>
+  <p>در آزمایش کنترل واکنش، از مادهٔ A، مادهٔ B و مخلوط واکنش جداگانه لکه می‌گذاریم. اگر واکنش کامل نشده باشد، لکه‌های A و B همچنان دیده می‌شوند. اگر واکنش کامل شده باشد، این مواد مصرف می‌شوند و لکه‌شان از بین می‌رود. محصول معمولاً پررنگ‌تر و بزرگ‌تر است و ناخالصی‌ها کمرنگ‌تر دیده می‌شوند. در تفسیر صفحه، لکه‌های مرجع A، B، C و D به شناسایی بهتر کمک می‌کنند.</p>
+
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr><th style="width:31%">مشاهده روی صفحه</th><th style="width:34%">تفسیر</th><th style="width:35%">اقدام</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>لکهٔ A و B هر دو دیده می‌شوند.</td><td>واکنش کامل نشده و مواد اولیه باقی مانده‌اند.</td><td>فرصت بیشتر بدهید یا شرایط واکنش را بررسی کنید.</td></tr>
+        <tr><td>فقط یکی از A یا B باقی مانده است.</td><td>مادهٔ دیگر مصرف شده است.</td><td>اگر لازم است، مادهٔ مصرف‌شده را اضافه کنید؛ در غیر این صورت ادامه دهید.</td></tr>
+        <tr><td>لکهٔ جدید ظاهر شده و لکه‌های اولیه کم‌رنگ شده‌اند.</td><td>محصول جدید تشکیل شده است.</td><td>واکنش را ادامه دهید و محصول را جدا کنید.</td></tr>
+        <tr><td>لکه‌ها کشیده یا به هم چسبیده‌اند.</td><td>غلظت زیاد یا حلال نامناسب است.</td><td>نمونه را رقیق کنید یا حلال را تغییر دهید.</td></tr>
+        <tr><td>لکه‌های کمرنگ در کنار لکهٔ اصلی دیده می‌شوند.</td><td>ناخالصی همراه نمونه وجود دارد.</td><td>در تفسیر خلوص و جداسازی، آن‌ها را در نظر بگیرید.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="box example">
+    <div class="box-t">مثال کنترل واکنش</div>
+    <p>فرض کنید A و B را مخلوط کرده‌اید و انتظار دارید C ساخته شود. از A، از B و از مخلوط واکنش لکه می‌گذارید. اگر لکه‌های A و B هنوز دیده شوند، واکنش کامل نشده است. اگر لکهٔ جدیدی ظاهر شود و لکه‌های اولیه کم‌رنگ شوند، مسیر تشکیل محصول را نشان می‌دهد. TLC به شما می‌گوید واکنش را ادامه دهید یا متوقف کنید.</p>
+  </div>
+
+  <h3>Rf؛ معیار حرکت ماده</h3>
+  <p>برای مقایسهٔ حرکت لکه‌ها، از ضریب بازداری یا Rf استفاده می‌کنیم. Rf برابر است با فاصله‌ای که ماده طی کرده، تقسیم بر فاصله‌ای که حلال طی کرده است. برای اندازه‌گیری، با خط‌کش فاصلهٔ مرکز لکه تا خط مبدأ و فاصلهٔ خط حلال تا خط مبدأ را اندازه می‌گیریم و اولی را بر دومی تقسیم می‌کنیم.</p>
+
+  <div class="formula formula-fa">
+    <span class="ltr">R<sub>f</sub></span> = فاصلهٔ طی‌شده توسط ماده ÷ فاصلهٔ طی‌شده توسط حلال
+    <div class="formula-note">صورت کسر: فاصلهٔ مرکز لکه تا خط مبدأ؛ مخرج کسر: فاصلهٔ خط حلال تا خط مبدأ.</div>
+  </div>
+
+  <p>اگر ماده مسافت بیشتری طی کند، Rf بزرگ‌تر است. Rf کوچک یعنی ماده بیشتر به فاز ساکن مانده و کمتر حرکت کرده است. Rf در یک اجرا و روی یک صفحه معنا دارد و برای مقایسهٔ لکه‌های همان اجرا به کار می‌رود. برای مقایسهٔ اجراهای مختلف، باید شرایط صفحه و حلال یکسان باشد.</p>
+
+  <div class="figure">
+    <div class="fig-title">نمودار تجسمی: اندازه‌گیری Rf</div>
+    <div class="rf-demo">
+      <div class="rf-plate">
+        <div class="rf-front"></div>
+        <div class="rf-origin"></div>
+        <div class="rf-spot second"></div>
+        <div class="rf-spot"></div>
+      </div>
+      <div class="rf-side">
+        <p><span class="rf-tag">خط حلال</span> بالاترین نقطهٔ پیشرفت فاز متحرک است.</p>
+        <p><span class="rf-tag">خط مبدأ</span> محل قرار گرفتن اولیهٔ لکه‌هاست.</p>
+        <p>برای لکهٔ پایین‌تر، فاصلهٔ طی‌شده کمتر است و Rf کوچک‌تری دارد. لکهٔ بالاتر، Rf بزرگ‌تری دارد.</p>
+        <p>هرچه Rf بزرگ‌تر باشد، مادهٔ مربوطه کمتر در فاز ساکن مانده است.</p>
+      </div>
+    </div>
+    <div class="fig-cap">فاصلهٔ مرکز هر لکه تا خط مبدأ، صورت کسر است؛ فاصلهٔ خط حلال تا خط مبدأ، مخرج کسر.</div>
+  </div>
+
+  <h3>تکنیک دوبعدی: یک لکه یا چند لکه؟</h3>
+  <p>گاهی یک لکهٔ پهن یا کشیده ممکن است در واقع چند ماده باشد که فرصت جدا شدن پیدا نکرده‌اند. برای بررسی این حالت، از TLC دوبعدی استفاده می‌کنیم. صفحه را در یک جهت توسعه می‌دهیم، خشک می‌کنیم، ۹۰ درجه می‌چرخانیم و دوباره در جهت عمود توسعه می‌دهیم. اگر بعد از بار دوم چند لکه جدا شود، نمونهٔ اولیه یک لکهٔ خالص نبوده و چند ماده داشته است. اگر یک لکه باقی بماند، احتمالاً یک مادهٔ واحد است.</p>
+  <p>این روش فرصت جداسازی بیشتری می‌دهد و به تشخیص خلوص کمک می‌کند. در کلاس تأکید شد که یک بار اجرا برای قضاوت کافی نیست؛ تجربه و تکرار لازم است. حتی برای صفحهٔ دو سانتی‌متری، باید چند بار آزمایش کرد تا رفتار لکه‌ها شناخته شود. TLC ساده به نظر می‌رسد، اما تفسیر آن نیاز به دقت و تجربه دارد.</p>
+
+  <div class="box tip">
+    <div class="box-t">جمع‌بندی TLC</div>
+    <p>صفحهٔ مناسب، حلال قطبی، لکهٔ بالاتر از سطح حلال، غلظت کم، حرکت پیوسته و بررسی زیر UV، پایهٔ یک TLC درست است. برای کنترل واکنش، لکهٔ مواد اولیه و محصول را کنار هم می‌گذاریم. برای شک به خلوص، TLC دوبعدی انجام می‌دهیم.</p>
+  </div>
+</section>
+
+<section class="chapter" id="ch8">
+  <div class="ch-head"><span class="ch-num">۸</span><h2>ستون دستی: از دوغاب تا جمع‌آوری</h2></div>
+
+  <p>کروماتوگرافی ستونی دستی، همان اصول کروماتوگرافی را در مقیاس بزرگ‌تر اجرا می‌کند. در این روش، سیلیکا در ستون بسته‌بندی می‌شود، نمونه روی بستر قرار می‌گیرد و فاز متحرک با جریان پیوسته از ستون می‌گذرد. دقت در بسته‌بندی، بارگذاری و نگه‌داشتن جریان، تفاوت بین یک جداسازی تمیز و یک اجرای خراب است.</p>
+
+  <h3>آماده‌سازی دوغاب و بسته‌بندی ستون</h3>
+  <p>ابتدا مقداری سیلیکا برمی‌داریم و آن را با حلال ترکیب می‌کنیم تا دوغاب یا ژل یکنواختی به دست آید. این دوغاب را داخل ستون می‌ریزیم و می‌گذاریم کامل بنشیند. بعد از نشست، ارتفاع بستر را بررسی می‌کنیم؛ اگر ارتفاع برای کار مورد نظر مناسب نبود، می‌توانیم مقدار سیلیکا را تغییر دهیم یا ستون را دوباره آماده کنیم.</p>
+  <p>ذرات سیلیکا در اندازه‌های مختلفی عرضه می‌شوند. در کلاس بازهٔ ۲۳۰ تا ۴۰۰ ذکر شد. ذرات خیلی ریزتر نیاز به پمپ فشار دارند تا فاز متحرک را از میان بستر عبور دهند. در ستون شیشه‌ای دستی، کف ستون باید یک فریت یا پشم شیشه یا پنبه داشته باشد تا سیلیکا بیرون نرود و فقط حلال عبور کند. بستر باید یکنواخت باشد؛ ترک، حباب و ناهمگونی، مسیر جریان را خراب می‌کند.</p>
+
+  <div class="figure">
+    <div class="fig-title">نمودار تجسمی: اجزای ستون دستی</div>
+    <div class="col-demo">
+      <div class="col-unit">
+        <div class="col-glass">
+          <div class="col-fill"></div>
+          <div class="col-frit"></div>
+          <div class="col-tip"></div>
+        </div>
+        <span class="col-label">بستر سیلیکا</span>
+        <span class="col-note">بستر یکنواخت، بدون ترک و همیشه خیس.</span>
+      </div>
+      <div class="col-unit">
+        <div class="col-glass">
+          <div class="col-fill"></div>
+          <div class="col-frit"></div>
+          <div class="col-tip"></div>
+        </div>
+        <span class="col-label">فریت و شیر</span>
+        <span class="col-note">فریت سیلیکا را نگه می‌دارد؛ شیر سرعت جریان را تنظیم می‌کند.</span>
+      </div>
+    </div>
+    <div class="fig-cap">ستون دستی از بدنهٔ شیشه‌ای، بستر سیلیکا، فریت یا پشم شیشه در کف و شیری برای تنظیم جریان تشکیل می‌شود.</div>
+  </div>
+
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr><th style="width:22%">جزء ستون</th><th style="width:38%">نقش</th><th style="width:40%">نکتهٔ اجرایی</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>بدنهٔ شیشه‌ای</td><td>نگه‌داشتن بستر و مشاهدهٔ باندها</td><td>باید سالم و بدون ترک باشد.</td></tr>
+        <tr><td>فریت یا پشم شیشه</td><td>عبور حلال و نگه‌داشتن سیلیکا</td><td>اگر کافی نباشد، سیلیکا از ستون خارج می‌شود.</td></tr>
+        <tr><td>بستر سیلیکا</td><td>فاز ساکن و محل جداسازی</td><td>یکنواخت باشد و هرگز خشک نشود.</td></tr>
+        <tr><td>شیر خروجی</td><td>تنظیم سرعت جریان</td><td>آرام باز و بسته شود تا فشار ناگهانی ایجاد نشود.</td></tr>
+        <tr><td>فاز متحرک</td><td>حمل نمونه در ستون</td><td>جریان پیوسته و سطح آن همیشه بالای بستر باشد.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>بارگذاری نمونه</h3>
+  <p>نمونه را در کمترین مقدار فاز متحرک حل می‌کنیم. سپس با پیپت پاستور، آرام و از کنار دیواره، روی سطح بستر می‌ریزیم. اجازه می‌دهیم حلال کمی پایین برود تا نمونه به سطح سیلیکا برسد، اما سطح نباید خشک شود. بعد از آن، فاز متحرک را آرام و از دیواره اضافه می‌کنیم. از همان لحظه، جداسازی شروع می‌شود؛ بنابراین نباید جریان را قطع کرد یا بستر را به هم زد.</p>
+  <p>بارگذاری خیلی سریع یا ریختن نمونه از ارتفاع زیاد، بستر را به هم می‌زند و باندها را پهن می‌کند. اگر نمونه در حجم زیادی حل شده باشد، باند اولیه پهن می‌شود و جداسازی ضعیف خواهد بود. به همین دلیل، کمترین حجم ممکن برای حل نمونه انتخاب می‌شود.</p>
+
+  <div class="flow">
+    <div class="flow-step"><b>۱. حل نمونه</b>در کمترین حجم فاز متحرک.</div>
+    <div class="flow-arrow">←</div>
+    <div class="flow-step"><b>۲. بارگذاری</b>آرام و از کنار دیواره.</div>
+    <div class="flow-arrow">←</div>
+    <div class="flow-step"><b>۳. عبور</b>اجازه می‌دهیم نمونه به سطح بستر برسد.</div>
+    <div class="flow-arrow">←</div>
+    <div class="flow-step"><b>۴. شست‌وشو</b>افزودن فاز متحرک و شروع جداسازی.</div>
+  </div>
+
+  <div class="box warning">
+    <div class="box-t">هشدار</div>
+    <p>اگر بستر خشک شود، ترک می‌خورد و مسیر جریان به هم می‌ریزد. سطح حلال را همیشه بالای بستر نگه دارید و قبل از خشک شدن، حلال تازه اضافه کنید.</p>
+  </div>
+
+  <h3>شست‌وشو، جداسازی و جمع‌آوری</h3>
+  <p>در طول اجرا، فاز متحرک باید به‌طور پیوسته از ستون عبور کند. وقتی سطح حلال پایین آمد، قبل از رسیدن به سطح بستر، حلال تازه اضافه می‌کنیم. شیر را آرام باز و بسته می‌کنیم تا فشار ناگهانی ایجاد نشود. فشار زیاد می‌تواند شیشه را بشکند یا بستر را جابه‌جا کند. در مثال کلاس، فلو ۱ میلی‌لیتر بر دقیقه به مدت ۵ دقیقه ذکر شد؛ فشار دستگاه باید در این مدت ثابت بماند و نوسان نکند.</p>
+  <p>وقتی مواد رنگی باشند، باندهای رنگی را می‌بینیم و هر بخش را جدا جمع می‌کنیم. اگر ماده بی‌رنگ باشد، باید بخش‌های خروجی را جمع کنیم و با TLC بررسی کنیم تا بفهمیم کدام بخش چه ماده‌ای دارد. در ستون‌های بزرگ‌تر، باندها پهن‌ترند و ظرفیت بارگذاری بیشتر است؛ در کلاس به ستون‌هایی با حجم حدود ۲۰ میکرولیتر هم اشاره شد. اما همین پهن‌شدن، جداسازی را حساس‌تر می‌کند.</p>
+
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr><th style="width:25%">مشکل</th><th style="width:35%">علت احتمالی</th><th style="width:40%">راه‌حل</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>باند پهن و به‌هم‌رسیده</td><td>فلوی زیاد یا بستر ناهمگون</td><td>فلو را کم کنید یا ستون را دوباره بسته‌بندی کنید.</td></tr>
+        <tr><td>خشک شدن بستر</td><td>پایین رفتن سطح حلال</td><td>حلال را به‌موقع اضافه کنید و جریان را پیوسته نگه دارید.</td></tr>
+        <tr><td>خروج سیلیکا از ستون</td><td>فریت یا پشم شیشهٔ ناکافی</td><td>کف ستون را با لایهٔ مناسب دوباره آماده کنید.</td></tr>
+        <tr><td>نوسان فشار یا شکستن شیشه</td><td>باز کردن ناگهانی شیر</td><td>شیر را آرام تنظیم کنید و از فشار بیش از حد پرهیز کنید.</td></tr>
+        <tr><td>جداسازی ضعیف</td><td>حلال نامناسب یا حجم نمونهٔ زیاد</td><td>نسبت حلال را تغییر دهید و نمونه را در حجم کمتری حل کنید.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="box example">
+    <div class="box-t">پایش بخش‌های خروجی با TLC</div>
+    <p>اگر ماده رنگی نباشد، نمی‌توان با چشم تشخیص داد کدام بخش از ستون چه ماده‌ای دارد. در این حالت، از هر بخش خروجی یک لکه روی صفحهٔ TLC می‌گذاریم و کنار لکهٔ مادهٔ مرجع قرار می‌دهیم. بخشی که لکهٔ آن با مادهٔ مرجع هم‌ارتفاع است، همان ماده را دارد. این کار، جمع‌آوری بخش‌ها را دقیق‌تر می‌کند. اگر حجم بخش خروجی زیاد باشد و لکه به‌خوبی دیده نشود، ابتدا آن را خشک یا تغلیظ می‌کنیم و در حجم کم روی صفحه لکه می‌گذاریم.</p>
+  </div>
+</section>
+
+<section class="chapter" id="ch9">
+  <div class="ch-head"><span class="ch-num">۹</span><h2>تبادل یونی و نرم‌کردن آب</h2></div>
+
+  <p>کروماتوگرافی فقط به جداسازی مولکول‌های آلی محدود نمی‌شود. یکی از کاربردهای مهم آن، جداسازی یون‌ها با تبادل یونی است. این روش در آزمایشگاه، در تصفیهٔ آب و حتی در ماشین‌های ظرفشویی دیده می‌شود. در این فصل، اصل تبادل یونی و نقش pH را بررسی می‌کنیم و سپس کاربرد نرم‌کردن آب را توضیح می‌دهیم.</p>
+
+  <h3>اصل تبادل یونی</h3>
+  <p>در تبادل یونی، از رزین‌هایی استفاده می‌شود که گروه‌های باردار مثبت یا منفی روی آن‌ها قرار دارد. رزین تبادل کاتیونی، کاتیون‌ها را می‌گیرد و به‌جای آن‌ها کاتیون دیگری آزاد می‌کند. رزین تبادل آنیونی، آنیون‌ها را می‌گیرد و آنیون دیگری آزاد می‌کند. با این رزین‌ها می‌توان یون‌های مختلف را از هم جدا کرد؛ مثلاً یون‌های منفی مانند یدید، یون A و یون B را می‌توان با یک ستون مناسب از هم تفکیک کرد.</p>
+  <p>نوع گروه باردار و قدرت آن در انتخاب رزین مهم است. رزین‌های قوی و ضعیف رفتار متفاوتی دارند و برای کاربردهای مختلف انتخاب می‌شوند. در همهٔ حالت‌ها، اصل کلی یکی است: یون باید با بار رزین هم‌خوانی داشته باشد تا نگه داشته شود. اگر بار یون با رزین هم‌خوان نباشد، برهم‌کنش مؤثری شکل نمی‌گیرد و یون از ستون خارج می‌شود.</p>
+
+  <div class="exchange-wrap">
+    <table class="exchange-table">
+      <tr>
+        <td class="ex-card">
+          <div class="bead">
+            <span class="charge c1">−</span>
+            <span class="charge c2">−</span>
+            <span class="charge c3">−</span>
+          </div>
+          <b>رزین تبادل کاتیونی</b>
+          <p>گروه‌های باردار منفی، کاتیون‌ها را جذب می‌کنند.</p>
+        </td>
+        <td class="ex-arrow">←</td>
+        <td class="ex-card">
+          <div class="bead">
+            <span class="charge c1">+</span>
+            <span class="charge c2">+</span>
+            <span class="charge c3">+</span>
+          </div>
+          <b>رزین تبادل آنیونی</b>
+          <p>گروه‌های باردار مثبت، آنیون‌ها را جذب می‌کنند.</p>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <h3>نرم‌کردن آب</h3>
+  <p>آب سخت دارای یون‌های کلسیم است. این یون‌ها با مواد محلول در آب رسوب می‌کنند و لکه‌های سفید گچی روی ظرف‌ها و سطوح می‌گذارند. در ماشین ظرفشویی، حرارت باعث بدتر شدن این رسوب‌ها می‌شود. برای حل این مشکل، از رزین تبادل کاتیونی استفاده می‌شود. رزین، کلسیم را می‌گیرد و به‌جای آن سدیم آزاد می‌کند. نتیجه، آبی است که کلسیم کمتری دارد و اصطلاحاً نرم شده است.</p>
+  <p>وقتی ظرفیت رزین پر شود، دیگر نمی‌تواند کلسیم بگیرد و باید احیا شود. در متن به نمک و رزین اشاره شد؛ نمک باعث می‌شود کلسیم از رزین جدا شود و رزین دوباره آمادهٔ گرفتن کلسیم شود. به همین دلیل، نرم‌کننده‌های آب خانگی به‌طور دوره‌ای با نمک احیا می‌شوند. اگر رزین اشباع شود و احیا نشود، آب دوباره سخت می‌شود.</p>
+
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr><th style="width:22%">وضعیت</th><th style="width:28%">یون غالب</th><th style="width:25%">رفتار رزین</th><th style="width:25%">نتیجه</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>آب سخت</td><td>کلسیم</td><td>رزین کاتیونی کلسیم را می‌گیرد.</td><td>سدیم آزاد می‌شود و آب نرم می‌شود.</td></tr>
+        <tr><td>رزین اشباع</td><td>کلسیم زیاد</td><td>ظرفیت رزین پر شده است.</td><td>کلسیم عبور می‌کند و آب دوباره سخت می‌شود.</td></tr>
+        <tr><td>رزین احیا‌شده</td><td>سدیم</td><td>رزین دوباره آمادهٔ تبادل است.</td><td>نرم‌کردن آب ادامه پیدا می‌کند.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="box warning">
+    <div class="box-t">نکتهٔ کاربردی</div>
+    <p>نرم‌کردن آب فقط «حذف کلسیم» نیست؛ یک تبادل یونی است. کلسیم گرفته می‌شود و سدیم آزاد می‌شود. بنابراین ترکیب یونی آب تغییر می‌کند، هرچند ظاهر آب ممکن است تغییر محسوسی نداشته باشد.</p>
+  </div>
+
+  <h3>pH و هم‌خوانی بار</h3>
+  <p>در تبادل یونی، pH فاز متحرک نقش تعیین‌کننده دارد، چون بار ماده را تغییر می‌دهد. اگر رزین تبادل کاتیونی باشد، ماده باید بار مثبت داشته باشد تا روی رزین نگه داشته شود. در pH اسیدی، گروه آمینی می‌تواند پروتون بگیرد و مثبت شود؛ در pH بازی، همین گروه می‌تواند خنثی یا منفی شود. وقتی ماده بار منفی پیدا کند، رزین کاتیونی آن را نگه نمی‌دارد و ماده از ستون خارج می‌شود.</p>
+  <p>پس برای جداسازی موفق، باید pH را طوری انتخاب کنیم که بار ماده با بار رزین هم‌خوانی داشته باشد. اگر بار هم‌خوان باشد، ماده با ستون برهم‌کنش می‌کند و جداسازی صورت می‌گیرد. اگر بار هم‌خوان نباشد، ماده بدون برهم‌کنش مؤثر از ستون می‌گذرد. این قاعده، هم در آزمایشگاه و هم در نرم‌کنندهٔ آب کاربرد دارد.</p>
+
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr><th style="width:20%">pH</th><th style="width:31%">حالت گروه آمینی</th><th style="width:20%">بار ماده</th><th style="width:29%">رفتار در رزین کاتیونی</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>اسیدی</td><td>پروتون‌دار</td><td>مثبت</td><td>نگه داشته می‌شود و جداسازی انجام می‌شود.</td></tr>
+        <tr><td>بازی</td><td>خنثی یا منفی</td><td>خنثی یا منفی</td><td>نگه داشته نمی‌شود و از ستون خارج می‌شود.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="box example">
+    <div class="box-t">مثال pH</div>
+    <p>یک مادهٔ آمینی در pH اسیدی مثبت است و به رزین کاتیونی می‌چسبد. همان ماده در pH بازی بار مثبت خود را از دست می‌دهد و ممکن است خنثی یا منفی شود. در این حالت، رزین کاتیونی آن را نگه نمی‌دارد و ماده زودتر خارج می‌شود. پس تغییر pH می‌تواند به‌طور مستقیم نتیجهٔ جداسازی را عوض کند.</p>
+  </div>
+
+  <div class="box summary">
+    <div class="box-t">سه شرط جداسازی یونی</div>
+    <ul class="checklist">
+      <li>رزین مناسب با بار هدف انتخاب شود.</li>
+      <li>بار ماده با بار رزین هم‌خوانی داشته باشد.</li>
+      <li>pH فاز متحرک طوری تنظیم شود که بار مورد نظر ایجاد شود.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="chapter" id="ch10">
+  <div class="ch-head"><span class="ch-num">۱۰</span><h2>جمع‌بندی پایانی</h2></div>
+
+  <p>در این جلسه، از پرسش «چرا کروماتوگرافی؟» شروع کردیم و به کاربرد آن در نرم‌کردن آب رسیدیم. در طول مسیر، مبانی تعادل فیزیکی، فاز نرمال و معکوس، ضریب توزیع، خانواده‌های کروماتوگرافی، ستون‌ها، خواندن کروماتوگرام، TLC، ستون دستی و تبادل یونی را مرور کردیم. اکنون می‌توانیم این مطالب را در یک نقشهٔ تصمیم‌گیری کنار هم ببینیم.</p>
+
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead>
+        <tr><th style="width:8%">گام</th><th style="width:30%">پرسش</th><th style="width:62%">تصمیم و نتیجه</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>۱</td><td>آیا اجزای نمونه اختلاف رفتار دارند؟</td><td>اگر رفتار یکسان باشد، جداسازی ممکن نیست؛ باید شرایط یا روش تغییر کند.</td></tr>
+        <tr><td>۲</td><td>فاز ساکن قطبی است یا غیرقطبی؟</td><td>ستون قطبی یعنی فاز نرمال؛ ستون غیرقطبی یعنی فاز معکوس.</td></tr>
+        <tr><td>۳</td><td>فاز متحرک گاز است یا مایع؟</td><td>گاز به GC یا GLC و مایع به LC، HPLC، PC یا TLC مربوط می‌شود.</td></tr>
+        <tr><td>۴</td><td>فاز ساکن جامد است یا مایع؟</td><td>جامد در ستون پرشده و مایع به‌صورت پوشش دیواره قرار می‌گیرد.</td></tr>
+        <tr><td>۵</td><td>سرعت و حلال چگونه تنظیم شوند؟</td><td>فلو بهینه، حلال مناسب و خالص، و هزینهٔ متعادل انتخاب می‌شود.</td></tr>
+        <tr><td>۶</td><td>نتیجه چگونه تفسیر می‌شود؟</td><td>ارتفاع، پهنا، مساحت و زمان بازداری پیک‌ها بررسی می‌شوند.</td></tr>
+        <tr><td>۷</td><td>برای تشخیص سریع چه ابزاری هست؟</td><td>TLC با Rf، کنترل واکنش، بررسی خلوص و تکنیک دوبعدی.</td></tr>
+        <tr><td>۸</td><td>برای جداسازی یون‌ها چه کاری لازم است؟</td><td>تبادل یونی با رزین مناسب، بار هم‌خوان و pH تنظیم‌شده.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="box summary">
+    <div class="box-t">چکیدهٔ یک‌صفحه‌ای</div>
+    <p>کروماتوگرافی جداسازی بر پایهٔ اختلاف تمایل مواد به فاز ساکن و فاز متحرک است. فاز ساکن قطبی، فاز نرمال و فاز ساکن غیرقطبی، فاز معکوس می‌سازد. ضریب توزیع K نسبت غلظت در فاز ساکن به فاز متحرک است و دیرتر یا زودتر خارج شدن ماده را توضیح می‌دهد. تعادل فیزیکی است و به معنای برابری غلظت دو فاز نیست. فاز متحرک گاز یا مایع، خانوادهٔ روش را تعیین می‌کند. ستون می‌تواند پرشده یا پوشش دیواره باشد. سرعت و حلال باید بهینه شوند تا کیفیت و هزینه متعادل بمانند. کروماتوگرام با ارتفاع، پهنا، مساحت و زمان بازداری خوانده می‌شود. TLC ابزار سریع تشخیص و کنترل واکنش است و Rf معیار حرکت لکه است. در تبادل یونی، بار رزین و بار ماده و pH باید هم‌خوان باشند تا جداسازی رخ دهد.</p>
+  </div>
+
+  <blockquote>
+    <p>کروماتوگرافی، هنر استفاده از تفاوت‌های کوچک است: هر ماده کمی متفاوت می‌ماند، کمی متفاوت حرکت می‌کند و در نهایت، به‌ترتیب از ستون بیرون می‌آید.</p>
+  </blockquote>
+
+  <h2>واژه‌نامهٔ اصطلاحات</h2>
+  <div class="table-wrap breakable">
+    <table class="tbl">
+      <thead>
+        <tr><th style="width:24%">اصطلاح</th><th style="width:76%">توضیح یک‌خطی</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>کروماتوگرافی</td><td>روش جداسازی اجزای نمونه بر اساس تفاوت تمایل آن‌ها به دو فاز.</td></tr>
+        <tr><td>فاز متحرک</td><td>گاز یا مایعی که نمونه را در ستون حمل می‌کند.</td></tr>
+        <tr><td>فاز ساکن</td><td>فازی که در ستون قرار دارد و مواد را با شدت متفاوت نگه می‌دارد.</td></tr>
+        <tr><td>فاز نرمال</td><td>روشی با فاز ساکن قطبی و فاز متحرک کم‌قطب‌تر.</td></tr>
+        <tr><td>فاز معکوس</td><td>روشی با فاز ساکن غیرقطبی و فاز متحرک قطبی‌تر.</td></tr>
+        <tr><td>ضریب توزیع K</td><td>نسبت غلظت ماده در فاز ساکن به غلظت آن در فاز متحرک در تعادل.</td></tr>
+        <tr><td>ضریب پارتیشن</td><td>نام دیگر ضریب توزیع.</td></tr>
+        <tr><td>تعادل فیزیکی</td><td>برابری نرخ رفت‌وبرگشت ماده بین دو فاز، بدون واکنش شیمیایی.</td></tr>
+        <tr><td>GC</td><td>کروماتوگرافی گازی با فاز متحرک گاز.</td></tr>
+        <tr><td>GLC</td><td>کروماتوگرافی گاز-مایع با فاز متحرک گاز و فاز ساکن مایع.</td></tr>
+        <tr><td>LC</td><td>کروماتوگرافی مایع با فاز متحرک مایع.</td></tr>
+        <tr><td>HPLC</td><td>کروماتوگرافی مایع با کارایی بالا و ستون پرشدهٔ آماده.</td></tr>
+        <tr><td>PC</td><td>کروماتوگرافی کاغذی با فاز ساکن کاغذ.</td></tr>
+        <tr><td>TLC</td><td>کروماتوگرافی لایه نازک روی صفحهٔ پوشیده از سیلیکا.</td></tr>
+        <tr><td>سیلیکا</td><td>مادهٔ جامد قطبی که در ستون و صفحهٔ TLC به کار می‌رود.</td></tr>
+        <tr><td>سیلانول</td><td>گروه قطبی روی سطح سیلیکا که با مواد برهم‌کنش می‌کند.</td></tr>
+        <tr><td>C18</td><td>ستون فاز معکوس با زنجیر ۱۸ کربنه متصل به سیلیکا.</td></tr>
+        <tr><td>کروماتوگرام</td><td>نمودار خروجی کروماتوگرافی که پیک‌ها را نشان می‌دهد.</td></tr>
+        <tr><td>زمان بازداری</td><td>فاصلهٔ زمانی از تزریق تا اوج پیک.</td></tr>
+        <tr><td>مساحت زیر پیک</td><td>معیاری از مقدار کل مادهٔ مربوط به آن پیک.</td></tr>
+        <tr><td>Rf</td><td>نسبت فاصلهٔ طی‌شده توسط ماده به فاصلهٔ طی‌شده توسط حلال در TLC.</td></tr>
+        <tr><td>تکنیک دوبعدی</td><td>توسعهٔ TLC در دو جهت عمود بر هم برای بررسی خلوص.</td></tr>
+        <tr><td>دوغاب</td><td>مخلوط سیلیکا و حلال که برای بسته‌بندی ستون آماده می‌شود.</td></tr>
+        <tr><td>ستون پرشده</td><td>ستونی که تمام آن از بستر جامد پر شده و فاز متحرک از خلل و فرج عبور می‌کند.</td></tr>
+        <tr><td>ستون با پوشش دیواره</td><td>ستونی که فاز ساکن به‌صورت لایهٔ نازک روی دیوارهٔ داخلی قرار دارد.</td></tr>
+        <tr><td>تبادل یونی</td><td>جداسازی یون‌ها با رزین دارای گروه‌های باردار مثبت یا منفی.</td></tr>
+        <tr><td>رزین کاتیونی</td><td>رزینی که کاتیون‌ها را می‌گیرد و کاتیون دیگری آزاد می‌کند.</td></tr>
+        <tr><td>نرم‌کنندهٔ آب</td><td>سیستمی که کلسیم آب را با سدیم تبادل می‌کند و سختی را کاهش می‌دهد.</td></tr>
+        <tr><td>pH</td><td>معیار اسیدی یا بازی بودن محیط که بار ماده و نتیجهٔ تبادل یونی را تعیین می‌کند.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="chapter closing" id="appendix">
+  <div class="closing-inner">
+    <div class="ch-head"><span class="ch-num">پ</span><h2>پیوست: نکات حاشیه‌ای جلسه</h2></div>
+    <p>در بخشی از جلسه، گفت‌وگو به مسائل اداری کلاس کشیده شد. برای کامل‌بودن پوشش رونویسی، خلاصهٔ آن در ادامه آمده است؛ این بخش جزو محتوای علمی جزوه نیست و فقط برای ثبت کامل جلسه ذکر می‌شود.</p>
+    <div class="box">
+      <div class="box-t">خلاصهٔ هماهنگی‌های کلاسی</div>
+      <ul>
+        <li>تعداد دانشجویان کلاس حدود ۱۵ نفر ذکر شد.</li>
+        <li>به انتقالی‌گرفتن یکی از دانشجویان اشاره شد.</li>
+        <li>از خانم موسوی با کد ۴۰۳ و کاهش تعداد به ۱۳ نفر صحبت شد.</li>
+        <li>موضوع تداخل کلاس‌ها، پیش‌نیاز و ارزیابی مطرح شد.</li>
+        <li>پیشنهاد شد برای بهبود وضعیت، پراکندگی در بلندمدت و به نفع دانشکده بررسی شود.</li>
+      </ul>
+    </div>
+    <div class="end-mark">پایان جزوه</div>
+  </div>
+</section>
+
+</div>
+</body>
+</html>
